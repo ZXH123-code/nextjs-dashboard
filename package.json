@@ -3,16 +3,26 @@
   "scripts": {
     "build": "next build",
     "dev": "next dev --turbopack",
-    "start": "next start"
+    "start": "next start",
+    "db:generate": "prisma generate",
+    "db:push": "prisma db push",
+    "db:migrate": "prisma migrate dev",
+    "db:studio": "prisma studio",
+    "db:seed": "prisma db seed",
+    "seed": "tsx app/seed/seed.ts"
   },
   "dependencies": {
     "@heroicons/react": "^2.2.0",
+    "@prisma/adapter-pg": "^7.2.0",
+    "@prisma/client": "^7.2.0",
     "@tailwindcss/forms": "^0.5.10",
     "autoprefixer": "10.4.20",
     "bcrypt": "^5.1.1",
     "clsx": "^2.1.1",
+    "lucide-react": "^0.562.0",
     "next": "latest",
     "next-auth": "5.0.0-beta.30",
+    "pg": "^8.17.1",
     "postcss": "8.5.1",
     "postgres": "^3.4.6",
     "react": "latest",
@@ -26,7 +36,13 @@
     "@types/bcrypt": "^5.0.2",
     "@types/node": "22.10.7",
     "@types/react": "19.0.7",
-    "@types/react-dom": "19.0.3"
+    "@types/react-dom": "19.0.3",
+    "baseline-browser-mapping": "^2.9.14",
+    "prisma": "^7.2.0",
+    "tsx": "^4.21.0"
+  },
+  "prisma": {
+    "seed": "tsx app/seed/seed.ts"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

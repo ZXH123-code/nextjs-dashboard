@@ -1,0 +1,114 @@
+generator client {
+  provider   = "prisma-client-js"
+  engineType = "client"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Customer {
+  id       String @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  name     String @db.VarChar(255)
+  email    String @db.VarChar(255)
+  imageUrl String @map("image_url") @db.VarChar(255)
+
+  @@map("customers")
+}
+
+model Invoice {
+  id         String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  customerId String   @map("customer_id") @db.Uuid
+  amount     Int
+  status     String   @db.VarChar(255)
+  date       DateTime @db.Date
+
+  @@map("invoices")
+}
+
+model Revenue {
+  month   String @unique @db.VarChar(4)
+  revenue Int
+
+  @@map("revenue")
+}
+
+model scm_order_events {
+  id              BigInt    @id @default(autoincrement())
+  po_id           BigInt
+  event_type      String    @db.VarChar(50)
+  shipped_qty     Int?      @default(0)
+  logistics_no    String?   @db.VarChar(100)
+  evidence_photos String?
+  operator_name   String?   @db.VarChar(50)
+  event_time      DateTime? @default(now()) @db.Timestamp(6)
+
+  @@index([po_id], map: "idx_event_po_id")
+  @@index([event_time], map: "idx_event_time")
+  @@index([event_type], map: "idx_event_type")
+}
+
+model scm_purchase_order_items {
+  id               BigInt   @id @default(autoincrement())
+  po_id            BigInt
+  sku_code         String   @db.VarChar(50)
+  product_name     String   @db.VarChar(100)
+  spec             String?  @db.VarChar(200)
+  quantity         Int
+  unit             String?  @default("PCS") @db.VarChar(20)
+  unit_price       Decimal? @default(0.00) @db.Decimal(12, 2)
+  carton_size      String?  @db.VarChar(50)
+  unit_cbm         Decimal? @db.Decimal(8, 4)
+  shipped_quantity Int?     @default(0)
+
+  @@index([po_id], map: "idx_item_po_id")
+}
+
+model scm_purchase_orders {
+  id                      BigInt    @id @default(autoincrement())
+  po_number               String    @unique(map: "uk_po_number") @db.VarChar(50)
+  supplier_id             BigInt
+  /// 订单状态: 10=待接单(PENDING), 20=生产中(PRODUCTION), 30=已拒绝(REJECTED), 40=部分发货(PARTIAL_SHIPPED), 50=全部发货(SHIPPED), 90=已取消(CANCELLED)
+  status                  Int       @default(10) @db.SmallInt
+  order_date              DateTime  @db.Date
+  requested_delivery_date DateTime  @db.Date
+  confirmed_delivery_date DateTime? @db.Date
+  actual_ship_date        DateTime? @db.Timestamp(6)
+  currency                String?   @default("USD") @db.VarChar(10)
+  total_amount            Decimal?  @default(0.00) @db.Decimal(12, 2)
+  total_cbm               Decimal?  @db.Decimal(10, 3)
+  incoterms               String?   @default("FOB") @db.VarChar(20)
+  loading_port            String?   @db.VarChar(50)
+  rejection_reason        String?   @db.VarChar(255)
+  remark                  String?
+  source_type             String?   @default("EXCEL_IMPORT") @db.VarChar(20)
+  created_at              DateTime? @default(now()) @db.Timestamp(6)
+  updated_at              DateTime? @default(now()) @db.Timestamp(6)
+
+  @@index([status], map: "idx_po_status")
+  @@index([supplier_id], map: "idx_po_supplier")
+}
+
+model scm_suppliers {
+  id              BigInt    @id @default(autoincrement())
+  supplier_code   String    @db.VarChar(50)
+  erp_vendor_code String?   @db.VarChar(50)
+  full_name       String    @db.VarChar(100)
+  short_name      String    @db.VarChar(50)
+  contact_name    String?   @db.VarChar(50)
+  contact_mobile  String    @unique(map: "uk_mobile") @db.VarChar(20)
+  main_category   String?   @db.VarChar(50)
+  province        String?   @db.VarChar(50)
+  status          Int?      @default(1) @db.SmallInt
+  created_at      DateTime? @default(now()) @db.Timestamp(6)
+  updated_at      DateTime? @default(now()) @db.Timestamp(6)
+
+  @@index([erp_vendor_code], map: "idx_erp_code")
+}
+
+model users {
+  id       String @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  name     String @db.VarChar(255)
+  email    String @unique
+  password String
+}

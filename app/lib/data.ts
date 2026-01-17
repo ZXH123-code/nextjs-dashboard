@@ -1,6 +1,7 @@
 import postgres from "postgres";
 import { CustomerField, CustomersTableType, InvoiceForm, InvoicesTable, LatestInvoiceRaw, Revenue } from "./definitions";
 import { formatCurrency } from "./utils";
+import { prisma } from "@/app/lib/prisma";
 
 const sql = postgres(process.env.POSTGRES_URL!, { ssl: "require" });
 
@@ -48,25 +49,27 @@ export async function fetchCardData() {
     // You can probably combine these into a single SQL query
     // However, we are intentionally splitting them to demonstrate
     // how to initialize multiple queries in parallel with JS.
-    const invoiceCountPromise = sql`SELECT COUNT(*) FROM invoices`;
-    const customerCountPromise = sql`SELECT COUNT(*) FROM customers`;
-    const invoiceStatusPromise = sql`SELECT
-         SUM(CASE WHEN status = 'paid' THEN amount ELSE 0 END) AS "paid",
-         SUM(CASE WHEN status = 'pending' THEN amount ELSE 0 END) AS "pending"
-         FROM invoices`;
+    // const invoiceCountPromise = sql`SELECT COUNT(*) FROM invoices`;
+    // const customerCountPromise = sql`SELECT COUNT(*) FROM customers`;
+    // const invoiceStatusPromise = sql`SELECT
+    //      SUM(CASE WHEN status = 'paid' THEN amount ELSE 0 END) AS "paid",
+    //      SUM(CASE WHEN status = 'pending' THEN amount ELSE 0 END) AS "pending"
+    //      FROM invoices`;
+    // 并行执行多个查询，提高性能
+    const [waiting_po_count, shipped_po_count, exception_po_count, total_po_count] = await Promise.all([
+      prisma.scm_purchase_orders.count({ where: { status: 10 } }), // PENDING - 待接单
+      prisma.scm_purchase_orders.count({ where: { status: 50 } }), // SHIPPED - 全部发货
+      prisma.scm_purchase_orders.count({ where: { status: 30 } }), // REJECTED - 已拒绝
+      prisma.scm_purchase_orders.count(), // 总数
+    ]);
 
-    const data = await Promise.all([invoiceCountPromise, customerCountPromise, invoiceStatusPromise]);
-
-    const numberOfInvoices = Number(data[0][0].count ?? "0");
-    const numberOfCustomers = Number(data[1][0].count ?? "0");
-    const totalPaidInvoices = formatCurrency(data[2][0].paid ?? "0");
-    const totalPendingInvoices = formatCurrency(data[2][0].pending ?? "0");
+    // const data = await Promise.all([invoiceCountPromise, customerCountPromise, invoiceStatusPromise]);
 
     return {
-      numberOfCustomers,
-      numberOfInvoices,
-      totalPaidInvoices,
-      totalPendingInvoices,
+      waiting_po_count,
+      shipped_po_count,
+      exception_po_count,
+      total_po_count,
     };
   } catch (error) {
     console.error("Database Error:", error);
