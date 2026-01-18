@@ -1,11 +1,9 @@
 "use server";
 
 import { z } from "zod";
-import postgres from "postgres";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-
-const sql = postgres(process.env.POSTGRES_URL!, { ssl: "require" });
+import { prisma } from "@/app/lib/prisma";
 
 const FormSchema = z.object({
   id: z.string(),
@@ -43,9 +41,14 @@ export async function createInvoice(prevState: State, formData: FormData) {
   const amountInCents = amount * 100;
   const date = new Date().toISOString().split("T")[0];
   try {
-    await sql`
-  INSERT INTO invoices (customer_id, amount, status, date)
-    VALUES (${customerId}, ${amountInCents}, ${status}, ${date})`;
+    await prisma.invoice.create({
+      data: {
+        customerId,
+        amount: amountInCents,
+        status,
+        date: new Date(date),
+      },
+    });
   } catch (error) {
     console.error("Database Error:", error);
     return {
@@ -72,7 +75,14 @@ export async function updateInvoice(id: string, prevState: State, formData: Form
   const { customerId, amount, status } = validatedFields.data;
   const amountInCents = amount * 100;
   try {
-    await sql`UPDATE invoices SET customer_id = ${customerId}, amount = ${amountInCents}, status = ${status} WHERE id = ${id}`;
+    await prisma.invoice.update({
+      where: { id },
+      data: {
+        customerId,
+        amount: amountInCents,
+        status,
+      },
+    });
   } catch (error) {
     console.error("Database Error:", error);
     return {
@@ -92,7 +102,9 @@ export async function updateInvoice(id: string, prevState: State, formData: Form
 export async function deleteInvoice(id: string, formData: FormData) {
   // throw new Error("Failed to delete invoice.");
   try {
-    await sql`DELETE FROM invoices WHERE id = ${id}`;
+    await prisma.invoice.delete({
+      where: { id },
+    });
   } catch (error) {
     console.error("Database Error:", error);
     throw new Error("Failed to delete invoice.");

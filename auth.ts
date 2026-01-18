@@ -3,15 +3,14 @@ import { authConfig } from "./auth.config";
 import Credentials from "next-auth/providers/credentials";
 import { z } from "zod";
 import bcrypt from "bcrypt";
-import postgres from "postgres";
-import type { User } from "./app/lib/definitions";
+import { prisma } from "./app/lib/prisma";
 
-const sql = postgres(process.env.POSTGRES_URL!, { ssl: "require" });
-
-async function getUser(email: string): Promise<User | undefined> {
+async function getUser(email: string) {
   try {
-    const user = await sql<User[]>`SELECT * FROM users WHERE email = ${email}`;
-    return user[0];
+    const user = await prisma.users.findUnique({
+      where: { email },
+    });
+    return user;
   } catch (error) {
     console.error("Database Error:", error);
     throw new Error("Failed to fetch user.");

@@ -1,13 +1,15 @@
 "use server";
 
 import { z } from "zod";
-import postgres from "postgres";
 import { redirect } from "next/navigation";
-import { signIn } from "@/auth";
+import { signIn, signOut } from "@/auth";
 import { AuthError } from "next-auth";
 import bcrypt from "bcrypt";
+import { prisma } from "@/app/lib/prisma";
 
-const sql = postgres(process.env.POSTGRES_URL!, { ssl: "require" });
+export async function logout() {
+  await signOut();
+}
 
 export async function authenticate(prevState: string | undefined, formData: FormData) {
   try {
@@ -48,9 +50,28 @@ export async function register(prevState: string | undefined, formData: FormData
 
   if (!validatedFields.success) {
     const errors = validatedFields.error.flatten().fieldErrors;
+    /*
+    扁平化后的结构（.flatten().fieldErrors）
+      {
+      name: ["姓名不能为空"],
+      email: ["请输入有效的邮箱地址"],
+      confirmPassword: ["密码和确认密码不匹配"]
+      }
+    */
     if (errors.confirmPassword) {
       return errors.confirmPassword[0];
     }
+    /*
+    Object.values(errors)
+    结果：
+    [
+    ["姓名不能为空"],
+    ["请输入有效的邮箱地址"],
+    ["密码至少需要6个字符"]
+    ]
+    flat() 方法将数组扁平化，结果：
+    ["姓名不能为空", "请输入有效的邮箱地址", "密码至少需要6个字符"]
+    */
     return Object.values(errors).flat()[0] || "表单验证失败";
   }
 
@@ -58,8 +79,10 @@ export async function register(prevState: string | undefined, formData: FormData
 
   // 2. 检查邮箱是否已存在
   try {
-    const existingUser = await sql`SELECT email FROM users WHERE email = ${email}`;
-    if (existingUser.length > 0) {
+    const existingUser = await prisma.users.findUnique({
+      where: { email },
+    });
+    if (existingUser) {
       return "该邮箱已被注册";
     }
   } catch (error) {
@@ -70,10 +93,13 @@ export async function register(prevState: string | undefined, formData: FormData
   // 3. 加密密码并创建用户
   try {
     const hashedPassword = await bcrypt.hash(password, 10);
-    await sql`
-      INSERT INTO users (name, email, password)
-      VALUES (${name}, ${email}, ${hashedPassword})
-    `;
+    await prisma.users.create({
+      data: {
+        name,
+        email,
+        password: hashedPassword,
+      },
+    });
   } catch (error) {
     console.error("Database Error:", error);
     return "数据库错误：注册失败";
