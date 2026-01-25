@@ -182,3 +182,328 @@ input[type='number']::-webkit-outer-spin-button {
 .popover-shadow {
   box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4), 0 0 1px rgba(0, 0, 0, 0.2);
 }
+
+/* ========== Landing Page 四色块动画 ========== */
+
+/* 色块基础样式 */
+.landing-panel {
+  content: '';
+  display: block;
+  position: absolute;
+  width: 200vmax;
+  height: 200vmax;
+  top: 50%;
+  left: 50%;
+  margin-top: -100vmax;
+  transform-origin: 0 50%;
+  transition: all 0.5s cubic-bezier(0.445, 0.05, 0, 1);
+  z-index: 10;
+  opacity: 0.75;
+  transition-delay: 0.2s;
+}
+
+/* 展开状态 - 标准（登录表单） */
+.landing-container:hover .landing-panel,
+.landing-container:active .landing-panel,
+.landing-container.expanded .landing-panel {
+  margin-left: 200px;
+  transform-origin: -200px 50%;
+  transition-delay: 0s;
+}
+
+/* 展开状态 - 大尺寸（注册表单） */
+.landing-container-large:hover .landing-panel,
+.landing-container-large:active .landing-panel,
+.landing-container-large.expanded .landing-panel {
+  margin-left: 280px;
+  transform-origin: -280px 50%;
+  transition-delay: 0s;
+}
+
+/* 四个方向的色块 - 登录页蓝紫色系 */
+.landing-panel-1 {
+  transform: rotate(45deg);
+  background: linear-gradient(135deg, #3b82f6 0%, #6366f1 100%);
+}
+
+.landing-panel-2 {
+  transform: rotate(135deg);
+  background: linear-gradient(135deg, #8b5cf6 0%, #a855f7 100%);
+}
+
+.landing-panel-3 {
+  transform: rotate(-45deg);
+  background: linear-gradient(135deg, #06b6d4 0%, #3b82f6 100%);
+}
+
+.landing-panel-4 {
+  transform: rotate(-135deg);
+  background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+}
+
+/* 四个方向的色块 - 注册页粉紫色系 */
+.landing-panel-r1 {
+  transform: rotate(45deg);
+  background: linear-gradient(135deg, #ec4899 0%, #f43f5e 100%);
+}
+
+.landing-panel-r2 {
+  transform: rotate(135deg);
+  background: linear-gradient(135deg, #f97316 0%, #ef4444 100%);
+}
+
+.landing-panel-r3 {
+  transform: rotate(-45deg);
+  background: linear-gradient(135deg, #a855f7 0%, #ec4899 100%);
+}
+
+.landing-panel-r4 {
+  transform: rotate(-135deg);
+  background: linear-gradient(135deg, #8b5cf6 0%, #a855f7 100%);
+}
+
+/* 中心内容区域 */
+.landing-center {
+  position: absolute;
+  width: 400px;
+  max-width: 90vw;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  padding: 30px;
+  opacity: 0;
+  transition: all 0.5s cubic-bezier(0.445, 0.05, 0, 1);
+  transition-delay: 0s;
+  z-index: 20;
+}
+
+.landing-container:hover .landing-center,
+.landing-container:active .landing-center,
+.landing-container.expanded .landing-center {
+  opacity: 1;
+  transition-delay: 0.2s;
+}
+
+/* Landing 表单输入框包装器 */
+.landing-input-wrapper {
+  position: relative;
+  width: 100%;
+  margin: 5px 0;
+}
+
+.landing-input-wrapper-compact {
+  position: relative;
+  width: 100%;
+  margin: 4px 0;
+}
+
+/* 输入框图标 */
+.landing-input-icon {
+  position: absolute;
+  left: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 18px;
+  height: 18px;
+  color: #9ca3af;
+  pointer-events: none;
+  transition: color 0.2s;
+}
+
+.landing-input-wrapper:focus-within .landing-input-icon {
+  color: #3b82f6;
+}
+
+.landing-input-wrapper-compact:focus-within .landing-input-icon {
+  color: #ec4899;
+}
+
+/* Landing 表单输入框样式 */
+.landing-input {
+  width: 100%;
+  padding: 15px;
+  padding-left: 44px;
+  margin: 0;
+  border-radius: 2px;
+  border: 1px solid #ccc;
+  font-family: inherit;
+  font-size: 14px;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.landing-input:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.landing-input::placeholder {
+  color: #9ca3af;
+}
+
+/* 紧凑版输入框 - 用于字段较多的表单 */
+.landing-input-compact {
+  width: 100%;
+  padding: 12px 15px;
+  padding-left: 44px;
+  margin: 0;
+  border-radius: 2px;
+  border: 1px solid #ccc;
+  font-family: inherit;
+  font-size: 14px;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.landing-input-compact:focus {
+  outline: none;
+  border-color: #ec4899;
+  box-shadow: 0 0 0 3px rgba(236, 72, 153, 0.1);
+}
+
+.landing-input-compact::placeholder {
+  color: #9ca3af;
+}
+
+/* Landing 按钮样式 */
+.landing-btn {
+  width: 100%;
+  padding: 15px;
+  margin-top: 10px;
+  border: none;
+  border-radius: 2px;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.landing-btn-primary {
+  background: linear-gradient(135deg, #3b82f6 0%, #6366f1 100%);
+  color: white;
+}
+
+.landing-btn-primary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4);
+}
+
+.landing-btn-primary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+.landing-btn-register {
+  background: linear-gradient(135deg, #ec4899 0%, #f43f5e 100%);
+  color: white;
+}
+
+.landing-btn-register:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(236, 72, 153, 0.4);
+}
+
+.landing-btn-register:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+/* 品牌元素 - 未展开时显示 */
+.landing-brand {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 15;
+  text-align: center;
+  color: white;
+  opacity: 1;
+  transition: all 0.5s cubic-bezier(0.445, 0.05, 0, 1);
+  transition-delay: 0.2s;
+  pointer-events: none;
+}
+
+.landing-container:hover .landing-brand,
+.landing-container:active .landing-brand,
+.landing-container.expanded .landing-brand {
+  opacity: 0;
+  transform: translate(-50%, -50%) scale(0.9);
+  transition-delay: 0s;
+}
+
+/* 展开后显示的额外信息 */
+.landing-info {
+  position: absolute;
+  z-index: 15;
+  color: white;
+  opacity: 0;
+  transition: all 0.5s cubic-bezier(0.445, 0.05, 0, 1);
+  transition-delay: 0s;
+  pointer-events: none;
+}
+
+.landing-container:hover .landing-info,
+.landing-container:active .landing-info,
+.landing-container.expanded .landing-info {
+  opacity: 1;
+  transition-delay: 0.3s;
+}
+
+/* 左侧信息 */
+.landing-info-left {
+  top: 50%;
+  left: 40px;
+  transform: translateY(-50%) translateX(-20px);
+  text-align: left;
+}
+
+.landing-container:hover .landing-info-left,
+.landing-container:active .landing-info-left,
+.landing-container.expanded .landing-info-left {
+  transform: translateY(-50%) translateX(0);
+}
+
+/* 右侧信息 */
+.landing-info-right {
+  top: 50%;
+  right: 40px;
+  transform: translateY(-50%) translateX(20px);
+  text-align: right;
+}
+
+.landing-container:hover .landing-info-right,
+.landing-container:active .landing-info-right,
+.landing-container.expanded .landing-info-right {
+  transform: translateY(-50%) translateX(0);
+}
+
+/* 底部信息 */
+.landing-info-bottom {
+  bottom: 40px;
+  left: 50%;
+  transform: translateX(-50%) translateY(20px);
+  text-align: center;
+}
+
+.landing-container:hover .landing-info-bottom,
+.landing-container:active .landing-info-bottom,
+.landing-container.expanded .landing-info-bottom {
+  transform: translateX(-50%) translateY(0);
+}
+
+/* 延迟动画类 */
+.delay-1000 {
+  animation-delay: 1s;
+}
+
+.delay-2000 {
+  animation-delay: 2s;
+}

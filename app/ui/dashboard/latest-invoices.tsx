@@ -1,9 +1,19 @@
 import { ArrowPathIcon } from "@heroicons/react/24/outline";
 import clsx from "clsx";
-import Image from "next/image";
 import { lusitana } from "@/app/ui/fonts";
 import { LatestInvoice } from "@/app/lib/definitions";
-import { fetchLatestInvoices } from "@/app/lib/data";
+import { fetchLatestInvoices } from "@/app/lib/data-prisma";
+import { Building2, Store, Factory, Warehouse, Users, LucideIcon } from "lucide-react";
+
+// 图标映射
+const iconMap: { [key: string]: LucideIcon } = {
+  Building2,
+  Store,
+  Factory,
+  Warehouse,
+  Users,
+};
+
 export default async function LatestInvoices() {
   const latestInvoices = await fetchLatestInvoices();
   return (
@@ -14,6 +24,7 @@ export default async function LatestInvoices() {
 
         <div className="bg-white px-6">
           {latestInvoices.map((invoice, i) => {
+            const IconComponent = invoice.iconType ? iconMap[invoice.iconType] : Building2;
             return (
               <div
                 key={invoice.id}
@@ -22,7 +33,9 @@ export default async function LatestInvoices() {
                 })}
               >
                 <div className="flex items-center">
-                  <Image src={invoice.image_url} alt={`${invoice.name}'s profile picture`} className="mr-4 rounded-full" width={32} height={32} />
+                  <div className="mr-4 flex h-8 w-8 items-center justify-center rounded-full bg-blue-100">
+                    <IconComponent className="h-5 w-5 text-blue-600" />
+                  </div>
                   <div className="min-w-0">
                     <p className="truncate text-sm font-semibold md:text-base">{invoice.name}</p>
                     <p className="hidden text-sm text-gray-500 sm:block">{invoice.email}</p>

@@ -1,15 +1,22 @@
 "use client";
 import {
-  FileText,
-  Users,
   LayoutDashboard,
-  ShoppingCart,
-  Factory,
-  Ship,
-  Banknote,
+  Package,
+  Lightbulb,
+  TrendingUp,
+  Shield,
   Settings,
-  Book,
-  Calendar,
+  Box,
+  BarChart3,
+  PackageSearch,
+  Undo2,
+  Sparkles,
+  LineChart,
+  Target,
+  Users,
+  ShieldCheck,
+  Sliders,
+  Activity,
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -39,79 +46,65 @@ interface NavLinkGroup {
 // 导航链接分组
 const navGroups: NavLinkGroup[] = [
   {
-    header: "GENERAL",
+    header: "核心看板",
     links: [
       {
-        name: "工作台",
+        name: "驾驶舱",
         href: "/dashboard",
         icon: LayoutDashboard,
         badge: { text: "Hot", type: "primary" },
       },
-      { name: "Invoices", href: "/dashboard/invoices", icon: FileText },
-      { name: "Customers", href: "/dashboard/customers", icon: Users },
     ],
   },
   {
-    header: "BUSINESS",
+    header: "AI 智脑中台",
     links: [
       {
-        name: "订单中心",
-        icon: ShoppingCart,
+        name: "履约与物流大脑",
+        icon: Package,
         subLinks: [
-          { name: "采购订单", href: "/orders/list" },
-          { name: "异常监控", href: "/orders/exceptions" },
-          { name: "数据导入", href: "/orders/import" },
+          { name: "3D 智能拼柜计算", href: "/dashboard/fulfillment/container-loading" },
+          { name: "虚拟库存与广告协同", href: "/dashboard/fulfillment/inventory-ads" },
+          { name: "退货预测与管理", href: "/dashboard/fulfillment/return-prediction" },
         ],
       },
       {
-        name: "供应商管理",
-        icon: Factory,
+        name: "选品与产品智脑",
+        icon: Lightbulb,
         subLinks: [
-          { name: "供应商档案", href: "/suppliers" },
-          {
-            name: "绩效考核",
-            href: "/suppliers/performance",
-            disabled: true,
-            badge: { text: "Beta", type: "secondary" },
-          },
+          { name: "新品开发与设计助手", href: "/dashboard/product-intelligence/new-product-designer" },
+          { name: "产品线布局优化", href: "/dashboard/product-intelligence/product-line" },
         ],
       },
       {
-        name: "物流交付",
-        icon: Ship,
+        name: "营销与定价引擎",
+        icon: TrendingUp,
         subLinks: [
-          { name: "发货记录", href: "/logistics/shipments" },
-          { name: "拼柜计划", href: "/logistics/consolidation", disabled: true },
+          { name: "动态定价系统", href: "/dashboard/marketing-pricing/dynamic-pricing" },
+          { name: "智能推荐配置", href: "/dashboard/marketing-pricing/recommendation" },
+          { name: "渠道与达人匹配", href: "/dashboard/marketing-pricing/influencer-matching" },
         ],
       },
       {
-        name: "财务结算",
-        icon: Banknote,
+        name: "服务与风控中台",
+        icon: Shield,
         subLinks: [
-          { name: "对账单", href: "/finance/reconciliations", disabled: true },
-          { name: "付款申请", href: "/finance/payments", disabled: true },
+          { name: "智能协商退款", href: "/dashboard/service-risk/refund-negotiation" },
         ],
       },
     ],
   },
   {
-    header: "EXTRA",
+    header: "系统配置",
     links: [
       {
-        name: "系统设置",
+        name: "系统管理",
         icon: Settings,
         subLinks: [
-          { name: "账号管理", href: "/system/users" },
-          { name: "操作日志", href: "/system/audit-logs" },
+          { name: "算法参数配置", href: "/dashboard/system/algorithm-config" },
+          { name: "模型训练监控", href: "/dashboard/system/model-monitoring" },
         ],
       },
-      {
-        name: "帮助文档",
-        href: "/docs",
-        icon: Book,
-        badge: { text: "Beta", type: "secondary" },
-      },
-      { name: "日历", href: "/calendar", icon: Calendar },
     ],
   },
 ];

@@ -37,6 +37,7 @@ export async function fetchLatestInvoices() {
       include: {
         customer: {
           select: {
+            id: true,
             name: true,
             email: true,
             imageUrl: true,
@@ -45,12 +46,16 @@ export async function fetchLatestInvoices() {
       },
     });
 
-    const latestInvoices = data.map((invoice) => ({
+    // 根据客户ID生成不同的图标类型
+    const iconTypes = ['Building2', 'Store', 'Factory', 'Warehouse', 'Users'];
+    
+    const latestInvoices = data.map((invoice, index) => ({
       id: invoice.id,
       amount: formatCurrency(invoice.amount),
       name: invoice.customer.name,
       email: invoice.customer.email,
       image_url: invoice.customer.imageUrl,
+      iconType: iconTypes[index % iconTypes.length], // 循环使用图标
     }));
 
     return latestInvoices;

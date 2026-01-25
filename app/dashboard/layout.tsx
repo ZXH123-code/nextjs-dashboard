@@ -15,8 +15,8 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         <TopBar />
 
         {/* 页面内容 */}
-        <main className="flex-1 overflow-y-auto bg-muted/30">
-          <div className="container mx-auto p-6 md:p-8">{children}</div>
+        <main className="flex-1 overflow-hidden bg-muted/30">
+          {children}
         </main>
       </div>
     </div>

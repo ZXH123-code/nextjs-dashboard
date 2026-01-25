@@ -12,14 +12,14 @@ export const SidebarContext = createContext<{
   collapsed: boolean;
   setCollapsed: (collapsed: boolean) => void;
 }>({
-  collapsed: false,
+  collapsed: true,
   setCollapsed: () => { },
 });
 
 export const useSidebar = () => useContext(SidebarContext);
 
 export default function SideNav() {
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(true);
 
   return (
     <SidebarContext.Provider value={{ collapsed, setCollapsed }}>

@@ -9,10 +9,11 @@ datasource db {
 }
 
 model Customer {
-  id       String @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
-  name     String @db.VarChar(255)
-  email    String @db.VarChar(255)
-  imageUrl String @map("image_url") @db.VarChar(255)
+  id       String    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  name     String    @db.VarChar(255)
+  email    String    @db.VarChar(255)
+  imageUrl String    @map("image_url") @db.VarChar(255)
+  invoices Invoice[]
 
   @@map("customers")
 }
@@ -23,6 +24,7 @@ model Invoice {
   amount     Int
   status     String   @db.VarChar(255)
   date       DateTime @db.Date
+  customer   Customer @relation(fields: [customerId], references: [id])
 
   @@map("invoices")
 }

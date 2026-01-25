@@ -37,6 +37,7 @@ export type LatestInvoice = {
   image_url: string;
   email: string;
   amount: string;
+  iconType?: string; // 用于显示的图标类型
 };
 
 // The database returns a number for amount, but we later format it to a string with the formatCurrency function
