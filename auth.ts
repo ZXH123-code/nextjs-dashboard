@@ -2,7 +2,7 @@ import NextAuth from "next-auth";
 import { authConfig } from "./auth.config";
 import Credentials from "next-auth/providers/credentials";
 import { z } from "zod";
-import bcrypt from "bcrypt";
+import bcrypt from "bcryptjs";
 import { prisma } from "./app/lib/prisma";
 
 async function getUser(email: string) {
@@ -19,6 +19,39 @@ async function getUser(email: string) {
 
 export const { auth, signIn, signOut } = NextAuth({
   ...authConfig,
+  callbacks: {
+    authorized: authConfig.callbacks?.authorized,
+    async jwt({ token, user }) {
+      if (user) {
+        token.id = user.id;
+        // 从数据库读取最新 role（Prisma 客户端可能未包含 role 字段时也能正确获取）
+        try {
+          const roleResult = await prisma.$queryRaw<{ role: string | null }[]>`
+            SELECT role FROM users WHERE id::text = ${user.id}
+          `;
+          token.role = roleResult[0]?.role ?? "sales";
+        } catch {
+          token.role = (user as { role?: string }).role ?? "sales";
+        }
+      }
+      return token;
+    },
+    async session({ session, token }) {
+      if (session.user && token.id) {
+        (session.user as { id?: string }).id = token.id as string;
+        // 每次请求从数据库读取最新 role，确保权限调整后立即生效（无需重新登录）
+        try {
+          const roleResult = await prisma.$queryRaw<{ role: string | null }[]>`
+            SELECT role FROM users WHERE id::text = ${token.id as string}
+          `;
+          (session.user as { role?: string }).role = roleResult[0]?.role ?? "sales";
+        } catch {
+          (session.user as { role?: string }).role = (token.role as string) ?? "sales";
+        }
+      }
+      return session;
+    },
+  },
   providers: [
     Credentials({
       async authorize(credentials) {

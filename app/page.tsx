@@ -98,11 +98,11 @@ function LandingContent() {
         <div className="flex items-center justify-center gap-3 mb-4">
           <GlobeAltIcon className="h-12 w-12 md:h-16 md:w-16 rotate-[15deg]" />
           <h1 className={`${lusitana.className} text-4xl md:text-6xl font-bold`}>
-            Acme
+            Silea CRM
           </h1>
         </div>
         <p className="text-lg md:text-xl text-white/90 mb-6">
-          数智化供应链管理平台
+          智能线索与客户管理平台
         </p>
         <div className="flex items-center justify-center gap-2 text-white/60 text-sm animate-pulse">
           <span>{isMobile ? "点击进入" : "移入鼠标进入"}</span>
@@ -125,7 +125,7 @@ function LandingContent() {
       {/* 展开后底部信息 */}
       <div className="landing-info landing-info-bottom">
         <p className="text-xs text-white/50">
-          © 2024 Acme Inc. · 让供应链更智能
+          © 2024 Silea CRM · 让客户管理更简单
         </p>
       </div>
 

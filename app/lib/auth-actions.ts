@@ -4,7 +4,9 @@ import { z } from "zod";
 import { redirect } from "next/navigation";
 import { signIn, signOut } from "@/auth";
 import { AuthError } from "next-auth";
-import bcrypt from "bcrypt";
+import bcrypt from "bcryptjs";
+import { revalidatePath } from "next/cache";
+import { auth } from "@/auth";
 import { prisma } from "@/app/lib/prisma";
 
 export async function logout() {
@@ -107,4 +109,29 @@ export async function register(prevState: string | undefined, formData: FormData
 
   // 4. 注册成功，重定向到登录页面
   redirect("/login?registered=true");
+}
+
+/** 更新用户角色（仅 admin 可操作，权限变更后立即生效，无需重新登录） */
+export async function updateUserRoleAction(userId: string, newRole: "admin" | "sales") {
+  const session = await auth();
+  const currentUserId = (session?.user as { id?: string })?.id;
+  const currentRole = (session?.user as { role?: string })?.role ?? "sales";
+
+  if (!currentUserId) return { error: "请先登录" };
+  if (currentRole !== "admin") return { error: "仅销售总管可调整用户角色" };
+  if (!userId || !["admin", "sales"].includes(newRole)) return { error: "参数无效" };
+
+  try {
+    await prisma.users.update({
+      where: { id: userId },
+      data: { role: newRole },
+    });
+    revalidatePath("/dashboard/permissions");
+    revalidatePath("/dashboard/profile");
+    revalidatePath("/dashboard");
+    return { success: true };
+  } catch (e) {
+    console.error("updateUserRole:", e);
+    return { error: "更新失败" };
+  }
 }

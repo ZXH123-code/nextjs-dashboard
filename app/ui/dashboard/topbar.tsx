@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   Bell,
@@ -29,15 +30,16 @@ export default function TopBar() {
       currentPath += `/${segment}`;
       if (index > 0) { // 跳过 'dashboard'
         const names: Record<string, string> = {
-          orders: "订单中心",
-          suppliers: "供应商",
-          logistics: "物流",
-          finance: "财务",
-          system: "系统",
-          invoices: "Invoices",
-          customers: "Customers",
+          profile: "个人信息",
+          permissions: "权限管理",
+          crm: "CRM",
+          leads: "线索管理表",
+          opportunities: "商机管理表",
+          customers: "客户管理表",
+          "follow-ups": "跟进记录",
+          new: "新建",
+          invoices: "发票",
           list: "列表",
-          exceptions: "异常监控",
           import: "导入",
         };
         breadcrumbs.push({
@@ -87,7 +89,7 @@ export default function TopBar() {
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground group-hover:text-foreground transition-colors" />
               <input
                 type="text"
-                placeholder="搜索订单、供应商、物流单号..."
+                placeholder="搜索线索、商机、客户..."
                 className={cn(
                   "w-full h-10 pl-10 pr-20 rounded-lg border bg-muted/50 text-sm transition-all duration-200",
                   "placeholder:text-muted-foreground",
@@ -189,10 +191,10 @@ export default function TopBar() {
             <Settings className="h-5 w-5" />
           </button>
 
-          {/* 用户菜单 */}
-          <button
-            type="button"
-            title="用户中心"
+          {/* 用户中心 - 查看个人信息 */}
+          <Link
+            href="/dashboard/profile"
+            title="个人信息"
             className={cn(
               "flex h-9 w-9 items-center justify-center rounded-full transition-all duration-200",
               "bg-gradient-to-br from-blue-500 to-cyan-500 text-white",
@@ -201,7 +203,7 @@ export default function TopBar() {
             )}
           >
             <User className="h-5 w-5" />
-          </button>
+          </Link>
         </div>
       </div>
 

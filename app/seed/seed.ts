@@ -1,4 +1,4 @@
-import bcrypt from "bcrypt";
+import bcrypt from "bcryptjs";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/app/lib/prisma";
 
@@ -17,9 +17,9 @@ async function main() {
 
     await prisma.users.createMany({
       data: [
-        { name: "Admin", email: "admin@example.com", password: passwordHash },
-        { name: "Operator", email: "operator@example.com", password: passwordHash },
-        { name: "Viewer", email: "viewer@example.com", password: passwordHash },
+        { name: "Admin", email: "admin@example.com", password: passwordHash, role: "admin" },
+        { name: "Operator", email: "operator@example.com", password: passwordHash, role: "sales" },
+        { name: "Viewer", email: "viewer@example.com", password: passwordHash, role: "sales" },
       ],
     });
     console.log("示例用户创建完成。");

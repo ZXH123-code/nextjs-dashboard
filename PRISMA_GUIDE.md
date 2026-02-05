@@ -53,14 +53,23 @@ npx prisma studio
 
 ## 📝 数据模型
 
-当前定义的数据模型包括：
+当前定义的数据模型主要包括两部分：
 
-- **User** - 用户表
-- **Customer** - 客户表
-- **Invoice** - 发票表
-- **Revenue** - 收入表
+- **CRM 相关表（当前主业务）**
+  - `users` - 用户 / 销售人员（含 `role` 字段：`admin` / `sales`）
+  - `crm_leads` - 线索管理
+  - `crm_opportunities` - 商机管理
+  - `crm_customers` - 客户管理
+  - `crm_follow_ups` - 跟进记录
+- **示例/历史表（可逐步淘汰或保留做 demo）**
+  - `Customer` - 老版本客户表
+  - `Invoice` - 老版本发票表
+  - `Revenue` - 老版本收入表
 
-详细定义请查看 `prisma/schema.prisma` 文件。
+详细定义请查看 `prisma/schema.prisma` 文件，CRM 相关的字段与关系说明也可以参考：
+
+- `docs/CRM_表结构与关系说明.md`
+- `docs/CRM_四张表与表单逻辑说明.md`
 
 ## 💻 使用示例
 

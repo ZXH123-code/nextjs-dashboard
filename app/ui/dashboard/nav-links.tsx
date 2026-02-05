@@ -1,22 +1,8 @@
 "use client";
 import {
   LayoutDashboard,
-  Package,
-  Lightbulb,
-  TrendingUp,
-  Shield,
-  Settings,
-  Box,
-  BarChart3,
-  PackageSearch,
-  Undo2,
-  Sparkles,
-  LineChart,
-  Target,
   Users,
-  ShieldCheck,
-  Sliders,
-  Activity,
+  Shield,
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -43,71 +29,45 @@ interface NavLinkGroup {
   links: NavLink[];
 }
 
-// 导航链接分组
-const navGroups: NavLinkGroup[] = [
-  {
-    header: "核心看板",
-    links: [
-      {
-        name: "驾驶舱",
-        href: "/dashboard",
-        icon: LayoutDashboard,
-        badge: { text: "Hot", type: "primary" },
-      },
-    ],
-  },
-  {
-    header: "AI 智脑中台",
-    links: [
-      {
-        name: "履约与物流大脑",
-        icon: Package,
-        subLinks: [
-          { name: "3D 智能拼柜计算", href: "/dashboard/fulfillment/container-loading" },
-          { name: "虚拟库存与广告协同", href: "/dashboard/fulfillment/inventory-ads" },
-          { name: "退货预测与管理", href: "/dashboard/fulfillment/return-prediction" },
-        ],
-      },
-      {
-        name: "选品与产品智脑",
-        icon: Lightbulb,
-        subLinks: [
-          { name: "新品开发与设计助手", href: "/dashboard/product-intelligence/new-product-designer" },
-          { name: "产品线布局优化", href: "/dashboard/product-intelligence/product-line" },
-        ],
-      },
-      {
-        name: "营销与定价引擎",
-        icon: TrendingUp,
-        subLinks: [
-          { name: "动态定价系统", href: "/dashboard/marketing-pricing/dynamic-pricing" },
-          { name: "智能推荐配置", href: "/dashboard/marketing-pricing/recommendation" },
-          { name: "渠道与达人匹配", href: "/dashboard/marketing-pricing/influencer-matching" },
-        ],
-      },
-      {
-        name: "服务与风控中台",
-        icon: Shield,
-        subLinks: [
-          { name: "智能协商退款", href: "/dashboard/service-risk/refund-negotiation" },
-        ],
-      },
-    ],
-  },
-  {
-    header: "系统配置",
-    links: [
-      {
-        name: "系统管理",
-        icon: Settings,
-        subLinks: [
-          { name: "算法参数配置", href: "/dashboard/system/algorithm-config" },
-          { name: "模型训练监控", href: "/dashboard/system/model-monitoring" },
-        ],
-      },
-    ],
-  },
-];
+// 导航链接分组 - CRM 简易系统（权限管理仅 admin 可见，由 NavLinks 动态注入）
+function getNavGroups(role: string): NavLinkGroup[] {
+  const groups: NavLinkGroup[] = [
+    {
+      header: "核心看板",
+      links: [
+        {
+          name: "驾驶舱",
+          href: "/dashboard",
+          icon: LayoutDashboard,
+        },
+      ],
+    },
+    {
+      header: "CRM",
+      links: [
+        {
+          name: "CRM 模块",
+          icon: Users,
+          subLinks: [
+            { name: "线索管理表", href: "/dashboard/crm/leads" },
+            { name: "商机管理表", href: "/dashboard/crm/opportunities" },
+            { name: "客户管理表", href: "/dashboard/crm/customers" },
+            { name: "跟进记录", href: "/dashboard/crm/follow-ups" },
+          ],
+        },
+      ],
+    },
+  ];
+  if (role === "admin") {
+    groups.push({
+      header: "系统",
+      links: [
+        { name: "权限管理", href: "/dashboard/permissions", icon: Shield },
+      ],
+    });
+  }
+  return groups;
+}
 
 // Badge 组件
 function Badge({ text, type }: { text: string; type: "primary" | "secondary" }) {
@@ -418,7 +378,8 @@ function NavLinkItem({
 }
 
 // 导出主组件
-export default function NavLinks({ collapsed = false }: { collapsed?: boolean }) {
+export default function NavLinks({ collapsed = false, role = "sales" }: { collapsed?: boolean; role?: string }) {
+  const navGroups = getNavGroups(role);
   return (
     <nav className="menu">
       <ul className="list-none p-0 m-0">

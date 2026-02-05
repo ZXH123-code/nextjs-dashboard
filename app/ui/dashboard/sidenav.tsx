@@ -18,7 +18,7 @@ export const SidebarContext = createContext<{
 
 export const useSidebar = () => useContext(SidebarContext);
 
-export default function SideNav() {
+export default function SideNav({ role = "sales" }: { role?: string }) {
   const [collapsed, setCollapsed] = useState(true);
 
   return (
@@ -67,14 +67,14 @@ export default function SideNav() {
                   collapsed ? "opacity-0 w-0" : "opacity-100"
                 )}
               >
-                Acme Inc
+                CRM 系统
               </h5>
             </Link>
           </div>
 
           {/* 导航链接区域 - 允许弹出菜单溢出 */}
           <div className="flex-1 overflow-y-auto overflow-x-visible sidebar-scroll py-2">
-            <NavLinks collapsed={collapsed} />
+            <NavLinks collapsed={collapsed} role={role} />
           </div>
 
           {/* Footer 区域 */}
@@ -86,7 +86,7 @@ export default function SideNav() {
           >
             <div className="bg-[var(--sidebar-footer-bg)] rounded-lg p-4 text-center text-xs">
               <div className="text-[var(--sidebar-text-hover)] mb-2">
-                Pro Dashboard
+                CRM 简易系统
               </div>
               <div className="text-[var(--sidebar-text)]">Built with Next.js</div>
             </div>
