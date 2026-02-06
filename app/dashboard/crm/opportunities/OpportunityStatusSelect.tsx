@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { updateOpportunityStatusWithFollowUpAction } from "@/app/lib/crm-actions";
+import { useAlert } from "@/hooks/use-alert";
 import { StatusChangeDialog } from "../components/StatusChangeDialog";
 import {
   Select,
@@ -24,6 +25,7 @@ export function OpportunityStatusSelect({
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [selectedStatus, setSelectedStatus] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const { showAlert, AlertComponent } = useAlert();
 
   const handleStatusChange = (newStatus: string) => {
     if (newStatus === currentStatus) return;
@@ -40,14 +42,14 @@ export function OpportunityStatusSelect({
         content
       );
       if (result?.error) {
-        alert(result.error);
+        showAlert(result.error, { type: "error", title: "操作失败" });
       } else {
         setIsDialogOpen(false);
         window.location.reload();
       }
     } catch (error) {
       console.error("更新状态失败:", error);
-      alert("更新状态失败");
+      showAlert("更新状态失败", { type: "error", title: "操作失败" });
     } finally {
       setIsSubmitting(false);
     }
@@ -72,6 +74,7 @@ export function OpportunityStatusSelect({
 
   return (
     <>
+      <AlertComponent />
       <Select value={currentStatus} onValueChange={handleStatusChange}>
         <SelectTrigger
           className={cn(

@@ -8,6 +8,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { useState, useRef, useEffect } from "react";
+import { useAlert } from "@/hooks/use-alert";
 
 interface SubLink {
   name: string;
@@ -99,6 +100,7 @@ function PopoverSubMenu({
   const pathname = usePathname();
   const menuRef = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState({ top: 0 });
+  const { showAlert, AlertComponent } = useAlert();
 
   // 计算位置
   useEffect(() => {
@@ -132,7 +134,9 @@ function PopoverSubMenu({
   if (!isVisible || !link.subLinks) return null;
 
   return (
-    <div
+    <>
+      <AlertComponent />
+      <div
       ref={menuRef}
       className={cn(
         "fixed z-[200] ml-1 min-w-[200px] rounded-md shadow-xl",
@@ -162,7 +166,7 @@ function PopoverSubMenu({
                 onClick={(e) => {
                   if (subLink.disabled) {
                     e.preventDefault();
-                    alert("功能开发中，敬请期待");
+                    showAlert("功能开发中，敬请期待", { type: "info", title: "提示" });
                   } else {
                     onClose();
                   }
@@ -187,6 +191,7 @@ function PopoverSubMenu({
         })}
       </ul>
     </div>
+    </>
   );
 }
 
@@ -203,6 +208,7 @@ function NavLinkItem({
   const [showPopover, setShowPopover] = useState(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const LinkIcon = link.icon;
+  const { showAlert, AlertComponent } = useAlert();
 
   // 带子菜单的项目
   if (link.subLinks) {
@@ -219,8 +225,10 @@ function NavLinkItem({
     };
 
     return (
-      <div className="menu-item relative">
-        <button
+      <>
+        <AlertComponent />
+        <div className="menu-item relative">
+          <button
           ref={buttonRef}
           onClick={handleClick}
           className={cn(
@@ -295,7 +303,7 @@ function NavLinkItem({
                       onClick={(e) => {
                         if (subLink.disabled) {
                           e.preventDefault();
-                          alert("功能开发中，敬请期待");
+                          showAlert("功能开发中，敬请期待", { type: "info", title: "提示" });
                         }
                       }}
                       className={cn(
@@ -330,6 +338,7 @@ function NavLinkItem({
           />
         )}
       </div>
+      </>
     );
   }
 

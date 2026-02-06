@@ -3,6 +3,7 @@
 import { useTransition } from "react";
 import { updateUserRoleAction } from "@/app/lib/auth-actions";
 import { useRouter } from "next/navigation";
+import { useAlert } from "@/hooks/use-alert";
 import {
   Select,
   SelectContent,
@@ -20,6 +21,7 @@ interface RoleSelectFormProps {
 export function RoleSelectForm({ userId, currentRole, isSelf }: RoleSelectFormProps) {
   const [isPending, startTransition] = useTransition();
   const router = useRouter();
+  const { showAlert, AlertComponent } = useAlert();
 
   const handleChange = (newRole: string) => {
     if (newRole === currentRole) return;
@@ -27,7 +29,7 @@ export function RoleSelectForm({ userId, currentRole, isSelf }: RoleSelectFormPr
     startTransition(async () => {
       const result = await updateUserRoleAction(userId, newRole as "admin" | "sales");
       if (result.error) {
-        alert(result.error);
+        showAlert(result.error, { type: "error", title: "操作失败" });
         return;
       }
       router.refresh();
@@ -35,11 +37,13 @@ export function RoleSelectForm({ userId, currentRole, isSelf }: RoleSelectFormPr
   };
 
   return (
-    <Select
-      value={currentRole}
-      onValueChange={handleChange}
-      disabled={isPending}
-    >
+    <>
+      <AlertComponent />
+      <Select
+        value={currentRole}
+        onValueChange={handleChange}
+        disabled={isPending}
+      >
       <SelectTrigger className="min-w-[120px]">
         <SelectValue placeholder="选择角色" />
       </SelectTrigger>
@@ -48,5 +52,6 @@ export function RoleSelectForm({ userId, currentRole, isSelf }: RoleSelectFormPr
         <SelectItem value="admin">销售总管</SelectItem>
       </SelectContent>
     </Select>
+    </>
   );
 }

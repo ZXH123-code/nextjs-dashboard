@@ -3,6 +3,8 @@ import { prisma } from "@/app/lib/prisma";
 import Link from "next/link";
 import { lusitana } from "@/app/ui/fonts";
 import { RoleSelectForm } from "./RoleSelectForm";
+import { RecycleBinSection } from "./RecycleBinSection";
+import { getCrmAuth, getDeletedLeads } from "@/app/lib/crm";
 import { Shield, ArrowLeft } from "lucide-react";
 
 export default async function PermissionsPage() {
@@ -47,6 +49,10 @@ export default async function PermissionsPage() {
     SELECT id, name, email, role FROM users ORDER BY name ASC
   `;
 
+  // 获取已删除的线索
+  const crmAuth = await getCrmAuth();
+  const deletedLeads = await getDeletedLeads(crmAuth);
+
   return (
     <main className="p-6 md:p-8">
       <div className="mb-4">
@@ -84,11 +90,10 @@ export default async function PermissionsPage() {
                 <td className="px-6 py-4 text-muted-foreground">{user.email}</td>
                 <td className="px-6 py-4">
                   <span
-                    className={`inline-flex px-2 py-0.5 rounded text-xs font-medium ${
-                      user.role === "admin"
-                        ? "bg-primary/20 text-primary"
-                        : "bg-muted text-muted-foreground"
-                    }`}
+                    className={`inline-flex px-2 py-0.5 rounded text-xs font-medium ${user.role === "admin"
+                      ? "bg-primary/20 text-primary"
+                      : "bg-muted text-muted-foreground"
+                      }`}
                   >
                     {user.role === "admin" ? "销售总管" : "销售人员"}
                   </span>
@@ -106,13 +111,15 @@ export default async function PermissionsPage() {
         </table>
       </div>
 
-      <div className="mt-6 rounded-lg border bg-muted/30 p-4 text-sm text-muted-foreground">
+      <div className="mt-6 mb-6 rounded-lg border bg-muted/30 p-4 text-sm text-muted-foreground">
         <p className="font-medium text-foreground mb-1">角色说明</p>
         <ul className="space-y-1">
           <li>• <strong>销售总管</strong>：可查看所有线索、商机、客户、跟进记录</li>
           <li>• <strong>销售人员</strong>：仅可查看自己负责的记录</li>
         </ul>
       </div>
+
+      <RecycleBinSection deletedLeads={deletedLeads} />
     </main>
   );
 }

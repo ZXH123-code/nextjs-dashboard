@@ -3,15 +3,20 @@
 import { useState, useEffect, Fragment } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { useAlert } from "@/hooks/use-alert";
+import { useFilter } from "@/hooks/use-filter";
+import { FilterDialog, type FilterField } from "@/components/ui/filter-dialog";
 import { OpportunityStatusSelect } from "./OpportunityStatusSelect";
 import { FollowUpTimeline } from "../components/FollowUpTimeline";
 import { WriteFollowUpDialog } from "../components/WriteFollowUpDialog";
 import { createManualFollowUpAction, updateOpportunityAction } from "@/app/lib/crm-actions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { ChevronDown, ChevronUp, MessageSquarePlus, User, ExternalLink } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { ChevronDown, ChevronUp, MessageSquarePlus, User, ExternalLink, Filter, X } from "lucide-react";
 import { FormSelect } from "@/components/ui/form-select";
 import { OPPORTUNITY_STATUS } from "@/app/lib/crm-constants";
+import { cn } from "@/lib/utils";
 
 type Opportunity = {
   id: string;
@@ -19,6 +24,7 @@ type Opportunity = {
   productType: string | null;
   status: string;
   amount: any;
+  contactPhone: string | null;
   createdAt: Date;
   expectedCloseDate: Date | null;
   lostReason: string | null;
@@ -27,7 +33,7 @@ type Opportunity = {
   leadId: string | null;
   salesPerson: { id: string; name: string } | null;
   deliveryPerson: { id: string; name: string } | null;
-  lead: { id: string; customerName: string } | null;
+  lead: { id: string; customerName: string; contactPhone: string | null } | null;
   customer: { id: string; name: string } | null;
 };
 
@@ -51,13 +57,36 @@ export function OpportunitiesTable({
   highlightId?: string;
 }) {
   const router = useRouter();
+  const { showAlert, AlertComponent } = useAlert();
   const [expandedOppIds, setExpandedOppIds] = useState<Set<string>>(new Set());
   const [writeFollowUpOppId, setWriteFollowUpOppId] = useState<string | null>(null);
   const [followUpRefreshKeys, setFollowUpRefreshKeys] = useState<Record<string, number>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [editing, setEditing] = useState<EditingState | null>(null);
-  const [saving, setSaving] = useState(false);
+  // 细粒度保存状态：Set<"oppId:field">
+  const [savingFields, setSavingFields] = useState<Set<string>>(new Set());
   const [rows, setRows] = useState(opportunities);
+  const [filterOpen, setFilterOpen] = useState(false);
+
+  // 定义筛选字段
+  const filterFields: FilterField[] = [
+    { key: "name", label: "商机名称", type: "text" },
+    { key: "productType", label: "产品类型", type: "text" },
+    { key: "status", label: "状态", type: "select", options: OPPORTUNITY_STATUS.map(s => ({ value: s, label: s })) },
+    { key: "amount", label: "金额", type: "number" },
+    { key: "expectedCloseDate", label: "预计成交日期", type: "date" },
+    { key: "salesPerson.name", label: "销售人员", type: "text" },
+    { key: "deliveryPerson.name", label: "交付人员", type: "text" },
+    { key: "createdAt", label: "创建时间", type: "date" },
+  ];
+
+  // 使用筛选 Hook
+  const { filteredData, conditions, applyFilter, clearFilter, hasActiveFilters } = useFilter(rows, filterFields);
+
+  // 更新 rows 时同步更新筛选结果
+  useEffect(() => {
+    setRows(opportunities);
+  }, [opportunities]);
 
   // 自动展开高亮的商机
   useEffect(() => {
@@ -101,7 +130,7 @@ export function OpportunitiesTable({
         ...data,
       });
       if (result?.error) {
-        alert(result.error);
+        showAlert(result.error, { type: "error", title: "操作失败" });
       } else {
         const oppIdJustSubmitted = writeFollowUpOppId;
         setWriteFollowUpOppId(null);
@@ -113,7 +142,7 @@ export function OpportunitiesTable({
       }
     } catch (error) {
       console.error("添加跟进记录失败:", error);
-      alert("添加跟进记录失败");
+      showAlert("添加跟进记录失败", { type: "error", title: "操作失败" });
     } finally {
       setIsSubmitting(false);
     }
@@ -128,7 +157,6 @@ export function OpportunitiesTable({
   };
 
   const saveEdit = async () => {
-    if (saving) return;
     if (!editing) return;
 
     const opp = rows.find(o => o.id === editing.oppId);
@@ -141,8 +169,17 @@ export function OpportunitiesTable({
       return;
     }
 
-    setSaving(true);
+    const fieldKey = `${editing.oppId}:${editing.field}`;
+    
+    // 如果该字段正在保存，直接返回（避免重复保存）
+    if (savingFields.has(fieldKey)) return;
+
     const prevRow = opp;
+    const editingField = editing.field;
+    const editingOppId = editing.oppId;
+    const editingValue = editing.value;
+
+    // 乐观更新：立即更新UI
     let nextValue: any = editing.value;
     let nextSalesPerson = opp.salesPerson;
     let nextDeliveryPerson = opp.deliveryPerson;
@@ -175,10 +212,17 @@ export function OpportunitiesTable({
           : o
       )
     );
+
+    // 标记为保存中
+    setSavingFields((prev) => new Set(prev).add(fieldKey));
+    
+    // 关闭编辑框，允许用户继续编辑其他字段
     setEditing(null);
+
+    // 异步保存（完全异步，不阻塞）
     try {
       const formData = new FormData();
-      formData.append("opportunityId", editing.oppId);
+      formData.append("opportunityId", editingOppId);
       formData.append("inline", "1");
 
       // 保留现有值
@@ -191,25 +235,34 @@ export function OpportunitiesTable({
       formData.append("deliveryPersonId", opp.deliveryPersonId ?? "");
 
       // 更新编辑的字段
-      formData.set(editing.field, editing.value);
+      formData.set(editingField, editingValue);
 
       const result = await updateOpportunityAction(null, formData);
+      
       if (result?.error) {
-        alert(result.error);
+        // 保存失败，回滚UI
         setRows((prev) =>
           prev.map((o) => (o.id === prevRow.id ? prevRow : o))
         );
+        showAlert(result.error, { type: "error", title: "操作失败" });
       } else {
+        // 保存成功，刷新数据
         router.refresh();
       }
     } catch (error) {
       console.error("保存失败:", error);
-      alert("保存失败");
+      // 保存失败，回滚UI
       setRows((prev) =>
         prev.map((o) => (o.id === prevRow.id ? prevRow : o))
       );
+      showAlert("保存失败", { type: "error", title: "操作失败" });
     } finally {
-      setSaving(false);
+      // 移除保存中状态
+      setSavingFields((prev) => {
+        const next = new Set(prev);
+        next.delete(fieldKey);
+        return next;
+      });
     }
   };
 
@@ -234,6 +287,8 @@ export function OpportunitiesTable({
   ) => {
     const isEditing = editing?.oppId === opp.id && editing?.field === field;
     const isHighlighted = highlightId === opp.id;
+    const fieldKey = `${opp.id}:${field}`;
+    const isSaving = savingFields.has(fieldKey);
 
     if (isEditing) {
       return (
@@ -249,7 +304,7 @@ export function OpportunitiesTable({
                 if (e.key === "Escape") cancelEdit();
               }}
               className="h-8 w-full rounded border border-primary bg-white px-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-              disabled={saving}
+              disabled={isSaving}
             >
               {selectOptions.map((opt) => (
                 <option key={opt.value} value={opt.value}>
@@ -269,7 +324,7 @@ export function OpportunitiesTable({
                 if (e.key === "Escape") cancelEdit();
               }}
               className="h-8 border-primary"
-              disabled={saving}
+              disabled={isSaving}
             />
           )}
         </div>
@@ -278,12 +333,22 @@ export function OpportunitiesTable({
 
     return (
       <div
-        onClick={() => startEdit(opp.id, field, getFieldValue(opp, field))}
-        className={`cursor-pointer rounded px-2 py-1 hover:bg-blue-50 ${isHighlighted ? "bg-yellow-100" : ""
-          }`}
-        title="点击编辑"
+        onClick={() => {
+          if (!isSaving) {
+            startEdit(opp.id, field, getFieldValue(opp, field));
+          }
+        }}
+        className={cn(
+          "flex items-center gap-1 rounded px-2 py-1",
+          isSaving ? "cursor-wait opacity-60" : "cursor-pointer hover:bg-blue-50",
+          isHighlighted && "bg-yellow-100"
+        )}
+        title={isSaving ? "保存中..." : "点击编辑"}
       >
-        {displayValue || <span className="text-muted-foreground">-</span>}
+        <span>{displayValue || <span className="text-muted-foreground">-</span>}</span>
+        {isSaving && (
+          <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-blue-500 border-t-transparent" />
+        )}
       </div>
     );
   };
@@ -301,6 +366,49 @@ export function OpportunitiesTable({
 
   return (
     <>
+      <AlertComponent />
+      <div className="mb-4 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Button
+            variant={hasActiveFilters ? "default" : "outline"}
+            size="sm"
+            onClick={() => setFilterOpen(true)}
+            className="flex items-center gap-2"
+          >
+            <Filter className="h-4 w-4" />
+            筛选
+            {hasActiveFilters && (
+              <Badge variant="info" className="ml-1.5 h-5 min-w-[20px] px-1.5 leading-none">
+                {conditions.length}
+              </Badge>
+            )}
+          </Button>
+          {hasActiveFilters && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={clearFilter}
+              className="flex items-center gap-2"
+            >
+              <X className="h-4 w-4" />
+              清除筛选
+            </Button>
+          )}
+        </div>
+        <div className="text-sm text-muted-foreground">
+          共 {filteredData.length} 条数据
+        </div>
+      </div>
+
+      <FilterDialog
+        open={filterOpen}
+        onOpenChange={setFilterOpen}
+        fields={filterFields}
+        conditions={conditions}
+        onApply={applyFilter}
+        onClear={clearFilter}
+      />
+
       <div className="rounded-lg border bg-card">
         <table className="w-full text-left text-sm">
           <thead className="border-b bg-muted/50">
@@ -309,6 +417,7 @@ export function OpportunitiesTable({
               <th className="px-4 py-3 font-medium">商机名称</th>
               <th className="px-4 py-3 font-medium">产品类型</th>
               <th className="px-4 py-3 font-medium">商机金额</th>
+              <th className="px-4 py-3 font-medium">联系方式</th>
               <th className="px-4 py-3 font-medium">创建日期</th>
               <th className="px-4 py-3 font-medium">预计赢单日期</th>
               <th className="px-4 py-3 font-medium">销售人员</th>
@@ -324,14 +433,23 @@ export function OpportunitiesTable({
             {opportunities.length === 0 ? (
               <tr>
                 <td
-                  colSpan={11}
+                  colSpan={12}
                   className="px-4 py-8 text-center text-muted-foreground"
                 >
                   暂无数据。将线索状态改为「有意向」后，商机会自动生成并出现在此处
                 </td>
               </tr>
+            ) : filteredData.length === 0 ? (
+              <tr>
+                <td
+                  colSpan={12}
+                  className="px-4 py-8 text-center text-muted-foreground"
+                >
+                  没有符合筛选条件的数据
+                </td>
+              </tr>
             ) : (
-              rows.map((opp) => (
+              filteredData.map((opp) => (
                 <Fragment key={opp.id}>
                   <tr
                     id={`opp-row-${opp.id}`}
@@ -365,6 +483,9 @@ export function OpportunitiesTable({
                           : "-",
                         "number"
                       )}
+                    </td>
+                    <td className="px-4 py-3">
+                      {opp.contactPhone ?? opp.lead?.contactPhone ?? "-"}
                     </td>
                     <td className="px-4 py-3">
                       {opp.createdAt.toLocaleDateString("zh-CN")}

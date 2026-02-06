@@ -38,11 +38,13 @@ model crm_lead {
   address       String?  @db.VarChar(500)
   industry      String?  @db.VarChar(100)
   leadSource    String?  @map("lead_source") @db.VarChar(100)
+  contactPhone  String?  @map("contact_phone") @db.VarChar(20) // 联系方式（手机号）
   createdAt     DateTime @default(now()) @map("created_at") @db.Timestamp(6)
   customerTier  String?  @map("customer_tier") @db.VarChar(50)
   salesPersonId String?  @map("sales_person_id") @db.Uuid
   status        String   @default("未跟进") @db.VarChar(50) // 未跟进|跟进中|有意向|无意向
   isClaimed     Boolean  @default(false) @map("is_claimed")
+  deletedAt     DateTime? @map("deleted_at") @db.Timestamp(6) // 软删除时间，null 表示未删除
 
   salesPerson            users?                              @relation(fields: [salesPersonId], references: [id])
   opportunity            crm_opportunity?
@@ -62,6 +64,7 @@ model crm_opportunity {
   productType       String?   @map("product_type") @db.VarChar(100)
   status            String    @default("初步沟通") @db.VarChar(50) // 初步沟通|方案确认|待签约|已赢单|已丢单
   amount            Decimal?  @db.Decimal(12, 2)
+  contactPhone      String?   @map("contact_phone") @db.VarChar(20) // 联系方式（手机号，从线索继承）
   createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
   expectedCloseDate DateTime? @map("expected_close_date") @db.Date
   salesPersonId     String?   @map("sales_person_id") @db.Uuid
@@ -93,7 +96,9 @@ model crm_customer {
   employeeCount        String?   @map("employee_count") @db.VarChar(50)
   tags                 String?   @db.VarChar(500)
   mainProducts         String?   @map("main_products") @db.VarChar(500)
+  contactPhone         String?   @map("contact_phone") @db.VarChar(20) // 联系方式（手机号，从商机/线索继承）
   opportunityId        String?   @unique @map("opportunity_id") @db.Uuid
+  actualAmount         Decimal?  @map("actual_amount") @db.Decimal(12, 2) // 实际成交金额（仅已签约客户需要）
   salesPersonId        String?   @map("sales_person_id") @db.Uuid
 
   opportunity crm_opportunity? @relation(fields: [opportunityId], references: [id])

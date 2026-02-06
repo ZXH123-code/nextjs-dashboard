@@ -81,7 +81,11 @@ export async function updateLeadStatusAction(leadId: string, status: string) {
   const userId = (session?.user as { id?: string })?.id;
   const role = (session?.user as { role?: string })?.role ?? "sales";
   if (!userId) return;
-  const lead = await prisma.crm_lead.findUnique({ where: { id: leadId }, select: { salesPersonId: true } });
+  const lead = await prisma.crm_lead.findUnique({ 
+    where: { id: leadId, deletedAt: null }, // 已删除的线索不能更新状态
+    select: { salesPersonId: true } 
+  });
+  if (!lead) return; // 线索不存在或已删除
   if (!(await checkCrmPermission(userId, role, lead))) return; // 无权限静默跳过
   await updateLeadStatus(leadId, status);
   revalidatePath("/dashboard/crm/leads");
@@ -120,6 +124,7 @@ export async function updateLeadAction(
     industry: (formData.get("industry") as string) || undefined,
     leadSource: (formData.get("leadSource") as string) || undefined,
     customerTier: (formData.get("customerTier") as string) || undefined,
+    contactPhone: (formData.get("contactPhone") as string) || undefined,
     salesPersonId: (formData.get("salesPersonId") as string) || null,
     status: (formData.get("status") as string) || undefined,
   });
@@ -130,7 +135,41 @@ export async function updateLeadAction(
   return {};
 }
 
-// 删除线索（仅 admin）：强制删除线索，并级联删除关联的商机与客户
+// 软删除线索（仅 admin）：设置 deletedAt，可恢复
+export async function softDeleteLeadAction(formData: FormData) {
+  const session = await auth();
+  const role = (session?.user as { role?: string })?.role ?? "sales";
+  if (role !== "admin") return { error: "无权限" };
+
+  const leadId = formData.get("leadId") as string;
+  if (!leadId) return { error: "缺少线索ID" };
+
+  const { softDeleteLead } = await import("@/app/lib/crm");
+  await softDeleteLead(leadId);
+  
+  revalidatePath("/dashboard/crm/leads");
+  revalidatePath("/dashboard");
+  return { success: true };
+}
+
+// 恢复已删除的线索（仅 admin）
+export async function restoreLeadAction(formData: FormData) {
+  const session = await auth();
+  const role = (session?.user as { role?: string })?.role ?? "sales";
+  if (role !== "admin") return { error: "无权限" };
+
+  const leadId = formData.get("leadId") as string;
+  if (!leadId) return { error: "缺少线索ID" };
+
+  const { restoreLead } = await import("@/app/lib/crm");
+  await restoreLead(leadId);
+  
+  revalidatePath("/dashboard/crm/leads");
+  revalidatePath("/dashboard");
+  return { success: true };
+}
+
+// 物理删除线索（仅 admin）：强制删除线索，并级联删除关联的商机与客户（谨慎使用）
 export async function deleteLeadAction(formData: FormData) {
   const session = await auth();
   const role = (session?.user as { role?: string })?.role ?? "sales";
@@ -145,6 +184,50 @@ export async function deleteLeadAction(formData: FormData) {
   revalidatePath("/dashboard/crm/opportunities");
   revalidatePath("/dashboard/crm/customers");
   revalidatePath("/dashboard");
+  revalidatePath("/dashboard/permissions");
+}
+
+// 批量清理旧的已删除线索（仅 admin）：彻底删除超过指定天数的已删除记录
+export async function cleanupOldDeletedLeadsAction(
+  daysOld: number = 90
+): Promise<{ error: string } | { success: true; count: number; message: string }> {
+  const session = await auth();
+  const role = (session?.user as { role?: string })?.role ?? "sales";
+  if (role !== "admin") return { error: "无权限" };
+
+  const cutoffDate = new Date();
+  cutoffDate.setDate(cutoffDate.getDate() - daysOld);
+
+  const deletedLeads = await prisma.crm_lead.findMany({
+    where: {
+      deletedAt: {
+        lte: cutoffDate, // 删除时间 <= cutoffDate
+        not: null,
+      },
+    },
+    select: { id: true },
+  });
+
+  if (deletedLeads.length === 0) {
+    return { success: true, count: 0, message: `没有超过 ${daysOld} 天的已删除记录` };
+  }
+
+  // 批量物理删除
+  const { deleteLeadWithCascade } = await import("@/app/lib/crm");
+  for (const lead of deletedLeads) {
+    try {
+      await deleteLeadWithCascade(lead.id);
+    } catch (error) {
+      console.error(`清理线索 ${lead.id} 失败:`, error);
+    }
+  }
+
+  revalidatePath("/dashboard/permissions");
+  return { 
+    success: true, 
+    count: deletedLeads.length, 
+    message: `已清理 ${deletedLeads.length} 条超过 ${daysOld} 天的已删除记录` 
+  };
 }
 
 // 更新线索的销售人员（看板下拉选择后同步到数据库）
@@ -156,7 +239,11 @@ export async function updateLeadSalesPersonFormAction(formData: FormData) {
   const userId = (session?.user as { id?: string })?.id;
   const role = (session?.user as { role?: string })?.role ?? "sales";
   if (!userId) return;
-  const lead = await prisma.crm_lead.findUnique({ where: { id: leadId }, select: { salesPersonId: true } });
+  const lead = await prisma.crm_lead.findUnique({ 
+    where: { id: leadId, deletedAt: null }, // 已删除的线索不能更新销售人员
+    select: { salesPersonId: true } 
+  });
+  if (!lead) return; // 线索不存在或已删除
   if (!(await checkCrmPermission(userId, role, lead))) return;
   await updateLeadSalesPerson(leadId, salesPersonId || null);
   revalidatePath("/dashboard/crm/leads");
@@ -183,7 +270,10 @@ export async function batchUpdateLeadSalesPersonAction(
     });
     if (salesPerson?.email) {
       const leads = await prisma.crm_lead.findMany({
-        where: { id: { in: leadIds } },
+        where: { 
+          id: { in: leadIds },
+          deletedAt: null, // 只处理未删除的线索
+        },
         select: { id: true, customerName: true },
       });
       const result = await sendLeadAssignmentNotification(
@@ -319,6 +409,7 @@ export async function createCustomerAction(formData: FormData) {
     tags: (formData.get("tags") as string) || undefined,
     mainProducts: (formData.get("mainProducts") as string) || undefined,
     status: (formData.get("status") as string) || "已签约",
+    actualAmount: undefined,
     salesPersonId,
   });
   revalidatePath("/dashboard/crm/customers");
@@ -355,6 +446,11 @@ export async function updateCustomerAction(
     ? new Date(firstMaintenanceDateStr)
     : null;
 
+  const actualAmountStr = (formData.get("actualAmount") as string)?.trim();
+  const actualAmount = actualAmountStr && actualAmountStr !== "" 
+    ? (isNaN(Number(actualAmountStr)) ? null : Number(actualAmountStr))
+    : null;
+
   await updateCustomer(customerId, {
     name,
     nickname: (formData.get("nickname") as string) || undefined,
@@ -365,6 +461,7 @@ export async function updateCustomerAction(
     employeeCount: (formData.get("employeeCount") as string) || undefined,
     tags: (formData.get("tags") as string) || undefined,
     mainProducts: (formData.get("mainProducts") as string) || undefined,
+    actualAmount,
   });
 
   revalidatePath("/dashboard/crm/customers");
@@ -424,13 +521,13 @@ export async function updateLeadStatusWithFollowUpAction(
   if (!userId) return { error: "未登录" };
 
   const lead = await prisma.crm_lead.findUnique({
-    where: { id: leadId },
-    include: { 
+    where: { id: leadId, deletedAt: null }, // 已删除的线索不能更新状态
+    include: {
       opportunity: true,
       salesPerson: { select: { id: true } },
     },
   });
-  if (!lead) return { error: "线索不存在" };
+  if (!lead) return { error: "线索不存在或已被删除" };
   if (!(await checkCrmPermission(userId, role, { salesPersonId: lead.salesPersonId }))) {
     return { error: "无权限" };
   }
@@ -476,7 +573,7 @@ export async function updateLeadSalesPersonWithFollowUpAction(
   if (!userId) return { error: "未登录" };
 
   const lead = await prisma.crm_lead.findUnique({
-    where: { id: leadId },
+    where: { id: leadId, deletedAt: null }, // 已删除的线索不能更新销售人员
     select: { salesPersonId: true },
   });
   if (!lead || !(await checkCrmPermission(userId, role, lead))) {
@@ -533,9 +630,12 @@ export async function batchUpdateLeadSalesPersonWithFollowUpAction(
   if (role !== "admin") return { error: "无权限" };
   if (!leadIds?.length || !salesPersonId) return { error: "参数无效" };
 
-  // 先查询原有的销售人员信息
+  // 先查询原有的销售人员信息（只查询未删除的线索）
   const oldLeads = await prisma.crm_lead.findMany({
-    where: { id: { in: leadIds } },
+    where: { 
+      id: { in: leadIds },
+      deletedAt: null, // 只处理未删除的线索
+    },
     select: { id: true, customerName: true, salesPersonId: true },
   });
 
@@ -682,10 +782,36 @@ export async function updateOpportunityStatusWithFollowUpAction(
 
   const opp = await prisma.crm_opportunity.findUnique({
     where: { id: opportunityId },
-    select: { salesPersonId: true },
+    select: { salesPersonId: true, status: true, amount: true, customer: { select: { id: true } } },
   });
   if (!(await checkCrmPermission(userId, role, opp))) {
     return { error: "无权限" };
+  }
+
+   // 不允许状态回退：只能从前面的阶段往后走，不能往回调
+   const STATUS_ORDER = ["初步沟通", "方案确认", "待签约", "已赢单", "已丢单"];
+   const currentStatus = opp?.status ?? "";
+   const currentIndex = STATUS_ORDER.indexOf(currentStatus);
+   const newIndex = STATUS_ORDER.indexOf(newStatus);
+   if (
+     currentStatus &&
+     currentIndex !== -1 &&
+     newIndex !== -1 &&
+     newIndex < currentIndex
+   ) {
+     return {
+       error: `不允许将商机状态从「${currentStatus}」回退到「${newStatus}」，如需修改请联系管理员处理。`,
+     };
+   }
+
+  // 若要变更为「待签约」，必须先填写商机金额
+  if (
+    newStatus === "待签约" &&
+    (opp?.amount == null || Number(opp.amount) <= 0)
+  ) {
+    return {
+      error: "请先在商机表中填写「金额」，再将状态改为「待签约」",
+    };
   }
 
   // 更新状态
@@ -724,10 +850,20 @@ export async function updateCustomerStatusWithFollowUpAction(
 
   const customer = await prisma.crm_customer.findUnique({
     where: { id: customerId },
-    select: { salesPersonId: true },
+    select: { salesPersonId: true, actualAmount: true },
   });
   if (!(await checkCrmPermission(userId, role, customer))) {
     return { error: "无权限" };
+  }
+
+  // 若要变更为「已签约」，必须先填写实际成交金额
+  if (
+    newStatus === "已签约" &&
+    (customer?.actualAmount == null || Number(customer.actualAmount) <= 0)
+  ) {
+    return {
+      error: "请先在客户表中填写「实际成交金额」，再将状态改为「已签约」",
+    };
   }
 
   // 更新客户状态

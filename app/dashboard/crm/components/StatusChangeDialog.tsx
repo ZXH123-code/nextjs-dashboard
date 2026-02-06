@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useAlert } from "@/hooks/use-alert";
 
 interface StatusChangeDialogProps {
   isOpen: boolean;
@@ -24,6 +25,7 @@ export function StatusChangeDialog({
   isSubmitting = false,
 }: StatusChangeDialogProps) {
   const [content, setContent] = useState(defaultContent);
+  const { showAlert, AlertComponent } = useAlert();
 
   // 当 defaultContent 变化时，更新 content（处理不同状态变更）
   useEffect(() => {
@@ -34,7 +36,7 @@ export function StatusChangeDialog({
 
   const handleConfirm = () => {
     if (!content.trim()) {
-      alert("请填写跟进补充说明");
+      showAlert("请填写跟进补充说明", { type: "warning", title: "提示" });
       return;
     }
     onConfirm(content);
@@ -48,10 +50,12 @@ export function StatusChangeDialog({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+    <>
+      <AlertComponent />
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
       <div className="w-full max-w-lg rounded-lg bg-white p-6 shadow-xl">
         <h2 className="mb-4 text-xl font-semibold text-gray-900">{title}</h2>
-        
+
         <div className="mb-4">
           <label className="mb-2 block text-sm font-medium text-gray-700">
             跟进补充说明
@@ -89,5 +93,6 @@ export function StatusChangeDialog({
         </div>
       </div>
     </div>
+    </>
   );
 }

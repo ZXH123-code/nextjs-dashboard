@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { sendBatchLeadAssignmentNotificationsAction } from "@/app/lib/crm-actions";
+import { useAlert } from "@/hooks/use-alert";
 import {
   Dialog,
   DialogContent,
@@ -42,6 +43,7 @@ export function EmailNotificationDialog({
     success: string[];
     failed: { id: string; name: string; error: string }[];
   } | null>(null);
+  const { showAlert, AlertComponent } = useAlert();
 
   const toggleSelect = (id: string) => {
     setSelectedIds((prev) =>
@@ -57,7 +59,7 @@ export function EmailNotificationDialog({
 
   const handleSend = async () => {
     if (selectedIds.length === 0) {
-      alert("请至少选择一个销售人员");
+      showAlert("请至少选择一个销售人员", { type: "warning", title: "提示" });
       return;
     }
     setSending(true);
@@ -79,7 +81,9 @@ export function EmailNotificationDialog({
   };
 
   return (
-    <Dialog open={open} onOpenChange={handleClose}>
+    <>
+      <AlertComponent />
+      <Dialog open={open} onOpenChange={handleClose}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
@@ -132,11 +136,10 @@ export function EmailNotificationDialog({
                           {person.email}
                         </span>
                         <span
-                          className={`rounded-full px-2 py-0.5 text-xs ${
-                            isNewAssignee
+                          className={`rounded-full px-2 py-0.5 text-xs ${isNewAssignee
                               ? "bg-green-100 text-green-700"
                               : "bg-orange-100 text-orange-700"
-                          }`}
+                            }`}
                         >
                           {isNewAssignee ? "新接手" : "被转走"}
                         </span>
@@ -212,5 +215,6 @@ export function EmailNotificationDialog({
         )}
       </DialogContent>
     </Dialog>
+    </>
   );
 }

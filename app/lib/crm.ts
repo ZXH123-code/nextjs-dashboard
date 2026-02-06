@@ -44,12 +44,27 @@ function salesFilter(userId: string) {
 /** 未登录时返回空数据（理论上 middleware 会拦截，此处兜底） */
 const emptyWhere = { id: "00000000-0000-0000-0000-000000000000" }; // 不可能存在的 id
 
+/**
+ * 构建线索查询条件（统一处理权限和软删除）
+ * @param auth 权限上下文
+ * @param includeDeleted 是否包含已删除的记录（默认 false，仅管理员恢复时使用）
+ */
+function buildLeadWhere(auth: CrmAuth, includeDeleted = false) {
+  const base = !auth ? emptyWhere : auth.role === "admin" ? {} : salesFilter(auth.userId);
+  
+  // 软删除过滤：默认只查询未删除的记录
+  const deletedFilter = includeDeleted ? {} : { deletedAt: null };
+  
+  return { ...base, ...deletedFilter };
+}
+
 // ============ 驾驶舱统计 ============
 export async function getCrmCounts(auth: CrmAuth) {
+  const leadWhere = buildLeadWhere(auth);
   const base =
     !auth ? emptyWhere : auth.role === "admin" ? {} : salesFilter(auth.userId);
   const [leadCount, opportunityCount, customerCount] = await Promise.all([
-    prisma.crm_lead.count({ where: base }),
+    prisma.crm_lead.count({ where: leadWhere }),
     prisma.crm_opportunity.count({ where: base }),
     prisma.crm_customer.count({ where: base }),
   ]);
@@ -57,8 +72,8 @@ export async function getCrmCounts(auth: CrmAuth) {
 }
 
 // ============ 线索 ============
-export async function getLeads(auth: CrmAuth) {
-  const where = !auth ? emptyWhere : auth.role === "admin" ? {} : salesFilter(auth.userId);
+export async function getLeads(auth: CrmAuth, includeDeleted = false) {
+  const where = buildLeadWhere(auth, includeDeleted);
   return prisma.crm_lead.findMany({
     where,
     orderBy: { createdAt: "desc" },
@@ -71,9 +86,31 @@ export async function getLeads(auth: CrmAuth) {
   });
 }
 
-export async function getLeadById(id: string, auth: CrmAuth) {
+/**
+ * 获取已删除的线索（仅管理员）
+ */
+export async function getDeletedLeads(auth: CrmAuth) {
+  if (!auth || auth.role !== "admin") return [];
+  
+  return prisma.crm_lead.findMany({
+    where: { 
+      deletedAt: { not: null }, // 只查询已删除的记录
+    },
+    orderBy: { deletedAt: "desc" }, // 按删除时间倒序
+    include: {
+      salesPerson: { select: { id: true, name: true } },
+      opportunity: {
+        select: { id: true, name: true, status: true },
+      },
+    },
+  });
+}
+
+export async function getLeadById(id: string, auth: CrmAuth, includeDeleted = false) {
   if (!auth) return null;
-  const where = auth.role === "admin" ? { id } : { id, ...salesFilter(auth.userId) };
+  const baseWhere = auth.role === "admin" ? { id } : { id, ...salesFilter(auth.userId) };
+  const deletedFilter = includeDeleted ? {} : { deletedAt: null };
+  const where = { ...baseWhere, ...deletedFilter };
   return prisma.crm_lead.findFirst({
     where,
     include: {
@@ -91,6 +128,7 @@ export async function createLead(data: {
   industry?: string;
   leadSource?: string;
   customerTier?: string;
+  contactPhone?: string;
   salesPersonId?: string;
   status?: string;
 }) {
@@ -103,6 +141,7 @@ export async function createLead(data: {
       industry: data.industry,
       leadSource: data.leadSource,
       customerTier: data.customerTier,
+      contactPhone: data.contactPhone,
       salesPersonId: data.salesPersonId,
       status: data.status ?? "未跟进",
     },
@@ -110,6 +149,8 @@ export async function createLead(data: {
 }
 
 export async function updateLeadStatus(id: string, status: string) {
+  // 注意：这里不检查 deletedAt，因为可能需要在恢复时更新状态
+  // 调用方应该确保只更新未删除的记录
   return prisma.crm_lead.update({
     where: { id },
     data: { status },
@@ -145,6 +186,7 @@ export async function updateLead(
     industry?: string;
     leadSource?: string;
     customerTier?: string;
+    contactPhone?: string;
     salesPersonId?: string | null;
     status?: string;
   }
@@ -159,12 +201,36 @@ export async function updateLead(
       ...(data.industry !== undefined && { industry: data.industry }),
       ...(data.leadSource !== undefined && { leadSource: data.leadSource }),
       ...(data.customerTier !== undefined && { customerTier: data.customerTier }),
+      ...(data.contactPhone !== undefined && { contactPhone: data.contactPhone }),
       ...(data.salesPersonId !== undefined && { salesPersonId: data.salesPersonId }),
       ...(data.status != null && { status: data.status }),
     },
   });
 }
 
+/**
+ * 软删除线索（推荐）：设置 deletedAt 时间戳，可恢复
+ */
+export async function softDeleteLead(id: string) {
+  return prisma.crm_lead.update({
+    where: { id },
+    data: { deletedAt: new Date() },
+  });
+}
+
+/**
+ * 恢复已删除的线索
+ */
+export async function restoreLead(id: string) {
+  return prisma.crm_lead.update({
+    where: { id },
+    data: { deletedAt: null },
+  });
+}
+
+/**
+ * 物理删除线索（谨慎使用，仅用于彻底清理）
+ */
 export async function deleteLead(id: string) {
   return prisma.crm_lead.delete({ where: { id } });
 }
@@ -172,50 +238,92 @@ export async function deleteLead(id: string) {
 /** 管理员强制删除线索：级联删除关联的商机、客户，并解除跟进记录关联 */
 export async function deleteLeadWithCascade(leadId: string) {
   const lead = await prisma.crm_lead.findUnique({
-    where: { id: leadId },
-    include: { opportunity: { include: { customer: true } } },
+    where: { id: leadId, deletedAt: null }, // 只查询未删除的记录
+    select: { 
+      id: true,
+      opportunity: { 
+        select: { 
+          id: true,
+          customer: { 
+            select: { id: true } 
+          } 
+        } 
+      } 
+    },
   });
   if (!lead) return;
 
-  const opportunity = lead.opportunity;
-  const customer = opportunity?.customer ?? null;
+  const opportunityId = lead.opportunity?.id;
+  const customerId = lead.opportunity?.customer?.id;
 
-  await prisma.$transaction(async (tx) => {
-    if (customer) {
-      await tx.crm_follow_up.updateMany({
-        where: { customerId: customer.id },
-        data: { customerId: null },
-      });
-      await tx.crm_customer.delete({ where: { id: customer.id } });
+  // 增加事务超时时间到 30 秒，并优化操作顺序
+  await prisma.$transaction(
+    async (tx) => {
+      // 1. 先解除所有跟进记录的关联（批量操作，效率高）
+      const followUpUpdates = [];
+      if (customerId) {
+        followUpUpdates.push(
+          tx.crm_follow_up.updateMany({
+            where: { customerId },
+            data: { customerId: null },
+          })
+        );
+      }
+      if (opportunityId) {
+        followUpUpdates.push(
+          tx.crm_follow_up.updateMany({
+            where: { opportunityId },
+            data: { opportunityId: null },
+          })
+        );
+      }
+      followUpUpdates.push(
+        tx.crm_follow_up.updateMany({
+          where: { leadId },
+          data: { leadId: null },
+        })
+      );
+      // 并行执行所有更新操作
+      await Promise.all(followUpUpdates);
+
+      // 2. 删除客户（如果存在）
+      if (customerId) {
+        await tx.crm_customer.delete({ where: { id: customerId } });
+      }
+
+      // 3. 删除商机（如果存在）
+      if (opportunityId) {
+        await tx.crm_opportunity.delete({ where: { id: opportunityId } });
+      }
+
+      // 4. 最后删除线索
+      await tx.crm_lead.delete({ where: { id: leadId } });
+    },
+    {
+      maxWait: 10000, // 等待锁的最大时间：10 秒
+      timeout: 30000, // 事务超时时间：30 秒
     }
-    if (opportunity) {
-      await tx.crm_follow_up.updateMany({
-        where: { opportunityId: opportunity.id },
-        data: { opportunityId: null },
-      });
-      await tx.crm_opportunity.delete({ where: { id: opportunity.id } });
-    }
-    await tx.crm_follow_up.updateMany({
-      where: { leadId },
-      data: { leadId: null },
-    });
-    await tx.crm_lead.delete({ where: { id: leadId } });
-  });
+  );
 }
 
 // ============ 商机 ============
 export async function getOpportunities(auth: CrmAuth) {
   const where = !auth ? emptyWhere : auth.role === "admin" ? {} : salesFilter(auth.userId);
-  return prisma.crm_opportunity.findMany({
+  const rows = await prisma.crm_opportunity.findMany({
     where,
     orderBy: { createdAt: "desc" },
     include: {
-      lead: { select: { id: true, customerName: true } },
+      lead: { select: { id: true, customerName: true, contactPhone: true } },
       salesPerson: { select: { id: true, name: true } },
       deliveryPerson: { select: { id: true, name: true } },
       customer: { select: { id: true, name: true } },
     },
   });
+  // Prisma Decimal 无法直接传给 Client Component，这里统一转成普通 number
+  return rows.map((o) => ({
+    ...o,
+    amount: o.amount != null ? Number(o.amount) : null,
+  }));
 }
 
 export async function createOpportunity(data: {
@@ -227,7 +335,18 @@ export async function createOpportunity(data: {
   expectedCloseDate?: Date;
   salesPersonId?: string;
   deliveryPersonId?: string;
+  contactPhone?: string;
 }) {
+  // 如果提供了 leadId，从线索继承 contactPhone
+  let contactPhone = data.contactPhone;
+  if (data.leadId && !contactPhone) {
+    const lead = await prisma.crm_lead.findUnique({
+      where: { id: data.leadId },
+      select: { contactPhone: true },
+    });
+    contactPhone = lead?.contactPhone ?? undefined;
+  }
+  
   return prisma.crm_opportunity.create({
     data: {
       name: data.name,
@@ -238,6 +357,7 @@ export async function createOpportunity(data: {
       expectedCloseDate: data.expectedCloseDate,
       salesPersonId: data.salesPersonId,
       deliveryPersonId: data.deliveryPersonId,
+      contactPhone,
     },
   });
 }
@@ -253,6 +373,7 @@ export async function updateOpportunity(
     salesPersonId?: string;
     deliveryPersonId?: string;
     lostReason?: string;
+    contactPhone?: string;
   }
 ) {
   return prisma.crm_opportunity.update({
@@ -266,6 +387,7 @@ export async function updateOpportunity(
       salesPersonId: data.salesPersonId,
       deliveryPersonId: data.deliveryPersonId,
       lostReason: data.lostReason,
+      ...(data.contactPhone !== undefined && { contactPhone: data.contactPhone }),
     },
   });
 }
@@ -280,14 +402,25 @@ export async function updateOpportunityStatus(id: string, status: string, lostRe
 // ============ 客户 ============
 export async function getCustomers(auth: CrmAuth) {
   const where = !auth ? emptyWhere : auth.role === "admin" ? {} : salesFilter(auth.userId);
-  return prisma.crm_customer.findMany({
+  const rows = await prisma.crm_customer.findMany({
     where,
     orderBy: { firstMaintenanceDate: "desc" },
     include: {
-      opportunity: { select: { id: true, name: true } },
+      opportunity: { 
+        select: { 
+          id: true, 
+          name: true,
+          lead: { select: { contactPhone: true } }
+        } 
+      },
       salesPerson: { select: { id: true, name: true } },
     },
   });
+  // 同样将 Decimal 类型的 actualAmount 转成普通 number，避免传给 Client Component 报错
+  return rows.map((c) => ({
+    ...c,
+    actualAmount: c.actualAmount != null ? Number(c.actualAmount) : null,
+  }));
 }
 
 export async function createCustomer(data: {
@@ -302,7 +435,19 @@ export async function createCustomer(data: {
   tags?: string;
   mainProducts?: string;
   status?: string;
+  actualAmount?: number | null;
+  contactPhone?: string;
 }) {
+  // 如果提供了 opportunityId，从商机/线索继承 contactPhone
+  let contactPhone = data.contactPhone;
+  if (data.opportunityId && !contactPhone) {
+    const opportunity = await prisma.crm_opportunity.findUnique({
+      where: { id: data.opportunityId },
+      include: { lead: { select: { contactPhone: true } } },
+    });
+    contactPhone = opportunity?.contactPhone ?? opportunity?.lead?.contactPhone ?? undefined;
+  }
+  
   return prisma.crm_customer.create({
     data: {
       name: data.name,
@@ -316,6 +461,8 @@ export async function createCustomer(data: {
       tags: data.tags,
       mainProducts: data.mainProducts,
       status: data.status ?? "已签约",
+      actualAmount: data.actualAmount ?? null,
+      contactPhone,
     },
   });
 }
@@ -332,6 +479,8 @@ export async function updateCustomer(
     employeeCount?: string;
     tags?: string;
     mainProducts?: string;
+    actualAmount?: number | null;
+    contactPhone?: string;
   }
 ) {
   return prisma.crm_customer.update({
@@ -346,6 +495,8 @@ export async function updateCustomer(
       employeeCount: data.employeeCount,
       tags: data.tags,
       mainProducts: data.mainProducts,
+      actualAmount: data.actualAmount,
+      ...(data.contactPhone !== undefined && { contactPhone: data.contactPhone }),
     },
   });
 }
@@ -532,8 +683,10 @@ export async function deleteFollowUp(id: string) {
 
 /** 线索转商机：当状态变为「有意向」时调用 */
 export async function leadToOpportunity(leadId: string) {
-  const lead = await prisma.crm_lead.findUnique({ where: { id: leadId } });
-  if (!lead) throw new Error("线索不存在");
+  const lead = await prisma.crm_lead.findUnique({ 
+    where: { id: leadId, deletedAt: null } // 已删除的线索不能转商机
+  });
+  if (!lead) throw new Error("线索不存在或已被删除");
   if (lead.status !== "有意向") throw new Error("仅当线索状态为「有意向」时可转入商机");
 
   const existing = await prisma.crm_opportunity.findUnique({ where: { leadId } });
@@ -546,6 +699,7 @@ export async function leadToOpportunity(leadId: string) {
       productType: null,
       status: "初步沟通",
       salesPersonId: lead.salesPersonId,
+      contactPhone: lead.contactPhone, // 继承线索的联系方式
     },
   });
 
@@ -565,6 +719,9 @@ export async function opportunityToCustomer(opportunityId: string) {
   if (opp.customer) throw new Error("该商机已转入客户");
 
   const lead = opp.lead;
+  // 继承联系方式：优先使用商机的 contactPhone，否则使用线索的 contactPhone
+  const contactPhone = opp.contactPhone ?? lead?.contactPhone ?? null;
+  
   const customer = await prisma.crm_customer.create({
     data: {
       name: lead?.customerName ?? opp.name,
@@ -575,6 +732,7 @@ export async function opportunityToCustomer(opportunityId: string) {
       opportunityId: opp.id,
       salesPersonId: opp.salesPersonId,
       status: opp.status === "已赢单" ? "已签约" : "预备签约",
+      contactPhone,
     },
   });
 

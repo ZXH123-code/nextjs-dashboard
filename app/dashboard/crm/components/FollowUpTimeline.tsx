@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useAlert } from "@/hooks/use-alert";
 
 interface FollowUp {
   id: string;
@@ -39,6 +40,7 @@ export function FollowUpTimeline({
   const [followUps, setFollowUps] = useState<FollowUp[]>([]);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState(false);
+  const { showAlert, AlertComponent } = useAlert();
 
   useEffect(() => {
     setLoading(true);
@@ -98,7 +100,9 @@ export function FollowUpTimeline({
   const displayFollowUps = expanded ? followUps : [latestFollowUp];
 
   return (
-    <div className="space-y-3">
+    <>
+      <AlertComponent />
+      <div className="space-y-3">
       {displayFollowUps.map((followUp, index) => (
         <div
           key={followUp.id}
@@ -179,7 +183,7 @@ export function FollowUpTimeline({
                 className="text-xs text-blue-600 hover:text-blue-800"
                 onClick={() => {
                   // TODO: 实现编辑功能
-                  alert("编辑功能待实现");
+                  showAlert("编辑功能待实现", { type: "info", title: "提示" });
                 }}
               >
                 编辑
@@ -187,9 +191,8 @@ export function FollowUpTimeline({
               <button
                 className="text-xs text-red-600 hover:text-red-800"
                 onClick={async () => {
-                  if (!confirm("确定要删除这条跟进记录吗？")) return;
                   // TODO: 实现删除功能
-                  alert("删除功能待实现");
+                  showAlert("删除功能待实现", { type: "info", title: "提示" });
                 }}
               >
                 删除
@@ -211,5 +214,6 @@ export function FollowUpTimeline({
         </button>
       )}
     </div>
+    </>
   );
 }

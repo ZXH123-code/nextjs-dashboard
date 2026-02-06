@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { getPendingNotificationSummaryAction, sendPendingNotificationsAction } from "@/app/lib/crm-actions";
+import { useAlert } from "@/hooks/use-alert";
 import {
   Dialog,
   DialogContent,
@@ -36,6 +37,7 @@ export function PendingNotificationDialog({
     success: string[];
     failed: { id: string; name: string; error: string }[];
   } | null>(null);
+  const { showAlert, AlertComponent } = useAlert();
 
   useEffect(() => {
     if (open) {
@@ -68,7 +70,7 @@ export function PendingNotificationDialog({
 
   const handleSend = async () => {
     if (selectedIds.length === 0) {
-      alert("请至少选择一个销售人员");
+      showAlert("请至少选择一个销售人员", { type: "warning", title: "提示" });
       return;
     }
     setSending(true);
@@ -88,7 +90,9 @@ export function PendingNotificationDialog({
   };
 
   return (
-    <Dialog open={open} onOpenChange={handleClose}>
+    <>
+      <AlertComponent />
+      <Dialog open={open} onOpenChange={handleClose}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
@@ -230,5 +234,6 @@ export function PendingNotificationDialog({
         )}
       </DialogContent>
     </Dialog>
+    </>
   );
 }

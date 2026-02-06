@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useAlert } from "@/hooks/use-alert";
 
 interface WriteFollowUpDialogProps {
   isOpen: boolean;
@@ -36,10 +37,11 @@ export function WriteFollowUpDialog({
     nextStep: "",
     customerNeeds: "",
   });
+  const { showAlert, AlertComponent } = useAlert();
 
   const handleConfirm = () => {
     if (!formData.content.trim()) {
-      alert("请填写跟进内容");
+      showAlert("请填写跟进内容", { type: "warning", title: "提示" });
       return;
     }
     onConfirm(formData);
@@ -60,7 +62,9 @@ export function WriteFollowUpDialog({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+    <>
+      <AlertComponent />
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
       <div className="w-full max-w-2xl rounded-lg bg-white p-6 shadow-xl">
         <h2 className="mb-4 text-xl font-semibold text-gray-900">
           写跟进 - {recordType}「{recordName}」
@@ -168,5 +172,6 @@ export function WriteFollowUpDialog({
         </div>
       </div>
     </div>
+    </>
   );
 }
