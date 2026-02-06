@@ -17,8 +17,9 @@ async function getUser(email: string) {
   }
 }
 
-export const { auth, signIn, signOut } = NextAuth({
+export const { auth, signIn, signOut, handlers } = NextAuth({
   ...authConfig,
+  trustHost: true, // 信任请求的 host，避免 UntrustedHost 错误（本地与反向代理场景）
   callbacks: {
     authorized: authConfig.callbacks?.authorized,
     async jwt({ token, user }) {

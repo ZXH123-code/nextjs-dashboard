@@ -1,6 +1,7 @@
 import type { NextAuthConfig } from "next-auth";
 
 export const authConfig = {
+  trustHost: true, // 信任请求的 host，避免 UntrustedHost 错误
   pages: {
     signIn: "/login",
   },
