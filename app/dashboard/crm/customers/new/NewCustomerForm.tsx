@@ -2,7 +2,7 @@
 
 import { useActionState } from "react";
 import { createCustomerAction } from "@/app/lib/crm-actions";
-import { CUSTOMER_STATUS } from "@/app/lib/crm";
+import { CUSTOMER_STATUS } from "@/app/lib/crm-constants";
 import Link from "next/link";
 import { Label } from "@/components/ui/label";
 import { FormSelect } from "@/components/ui/form-select";
