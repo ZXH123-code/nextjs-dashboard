@@ -17,6 +17,12 @@ type LeadRow = {
 
 const ALLOWED_STATUS = new Set(["未跟进", "跟进中", "有意向", "无意向"]);
 
+/** 将 Excel 解析出的任意类型转为字符串再 trim，避免数字等类型无 trim 报错 */
+function toStr(v: unknown): string {
+  if (v == null) return "";
+  return String(v).trim();
+}
+
 type RowPreview = {
   row: number;
   status: "success" | "error";
@@ -80,7 +86,7 @@ export async function POST(req: Request) {
     const salesEmails: string[] = Array.from(
       new Set(
         rows
-          .map((r: LeadRow) => (r.销售人员邮箱 || "").trim())
+          .map((r: LeadRow) => toStr(r.销售人员邮箱))
           .filter((e: string) => e.length > 0)
       )
     );
@@ -88,9 +94,9 @@ export async function POST(req: Request) {
     const users =
       salesEmails.length > 0
         ? await prisma.users.findMany({
-            where: { email: { in: salesEmails } },
-            select: { id: true, email: true },
-          })
+          where: { email: { in: salesEmails } },
+          select: { id: true, email: true },
+        })
         : [];
 
     const emailToUserId = new Map(users.map((u) => [u.email, u.id]));
@@ -108,8 +114,8 @@ export async function POST(req: Request) {
     }[] = [];
 
     rows.forEach((row: LeadRow, index: number) => {
-      const rowNum = index + 2; // 默认第一行为表头
-      const customerName = (row.客户名称 || "").trim();
+      const rowNum = index + 1; // 记录序号，从1开始
+      const customerName = toStr(row.客户名称);
       if (!customerName) {
         const message = "客户名称为空";
         errors.push({ row: rowNum, message });
@@ -119,20 +125,20 @@ export async function POST(req: Request) {
           message,
           data: {
             客户名称: customerName,
-            昵称: (row.昵称 || "").trim() || undefined,
-            城市: (row.城市 || "").trim() || undefined,
-            详细地址: (row.详细地址 || "").trim() || undefined,
-            行业: (row.行业 || "").trim() || undefined,
-            线索来源: (row.线索来源 || "").trim() || undefined,
-            客户分层: (row.客户分层 || "").trim() || undefined,
-            销售人员邮箱: (row.销售人员邮箱 || "").trim() || undefined,
-            状态: (row.状态 || "").trim() || "未跟进",
+            昵称: toStr(row.昵称) || undefined,
+            城市: toStr(row.城市) || undefined,
+            详细地址: toStr(row.详细地址) || undefined,
+            行业: toStr(row.行业) || undefined,
+            线索来源: toStr(row.线索来源) || undefined,
+            客户分层: toStr(row.客户分层) || undefined,
+            销售人员邮箱: toStr(row.销售人员邮箱) || undefined,
+            状态: toStr(row.状态) || "未跟进",
           },
         });
         return;
       }
 
-      let status = (row.状态 || "").trim();
+      let status = toStr(row.状态);
       if (!status) status = "未跟进";
       if (!ALLOWED_STATUS.has(status)) {
         const message = `状态不合法：${status}，仅支持 未跟进/跟进中/有意向/无意向`;
@@ -143,13 +149,13 @@ export async function POST(req: Request) {
           message,
           data: {
             客户名称: customerName,
-            昵称: (row.昵称 || "").trim() || undefined,
-            城市: (row.城市 || "").trim() || undefined,
-            详细地址: (row.详细地址 || "").trim() || undefined,
-            行业: (row.行业 || "").trim() || undefined,
-            线索来源: (row.线索来源 || "").trim() || undefined,
-            客户分层: (row.客户分层 || "").trim() || undefined,
-            销售人员邮箱: (row.销售人员邮箱 || "").trim() || undefined,
+            昵称: toStr(row.昵称) || undefined,
+            城市: toStr(row.城市) || undefined,
+            详细地址: toStr(row.详细地址) || undefined,
+            行业: toStr(row.行业) || undefined,
+            线索来源: toStr(row.线索来源) || undefined,
+            客户分层: toStr(row.客户分层) || undefined,
+            销售人员邮箱: toStr(row.销售人员邮箱) || undefined,
             状态: status,
           },
         });
@@ -157,7 +163,7 @@ export async function POST(req: Request) {
       }
 
       let salesPersonId: string | undefined = undefined;
-      const salesEmail = (row.销售人员邮箱 || "").trim();
+      const salesEmail = toStr(row.销售人员邮箱);
       if (salesEmail) {
         const uid = emailToUserId.get(salesEmail);
         if (!uid) {
@@ -169,12 +175,12 @@ export async function POST(req: Request) {
             message,
             data: {
               客户名称: customerName,
-              昵称: (row.昵称 || "").trim() || undefined,
-              城市: (row.城市 || "").trim() || undefined,
-              详细地址: (row.详细地址 || "").trim() || undefined,
-              行业: (row.行业 || "").trim() || undefined,
-              线索来源: (row.线索来源 || "").trim() || undefined,
-              客户分层: (row.客户分层 || "").trim() || undefined,
+              昵称: toStr(row.昵称) || undefined,
+              城市: toStr(row.城市) || undefined,
+              详细地址: toStr(row.详细地址) || undefined,
+              行业: toStr(row.行业) || undefined,
+              线索来源: toStr(row.线索来源) || undefined,
+              客户分层: toStr(row.客户分层) || undefined,
               销售人员邮箱: salesEmail,
               状态: status,
             },
@@ -186,12 +192,12 @@ export async function POST(req: Request) {
 
       dataToInsert.push({
         customerName,
-        nickname: (row.昵称 || "").trim() || undefined,
-        city: (row.城市 || "").trim() || undefined,
-        address: (row.详细地址 || "").trim() || undefined,
-        industry: (row.行业 || "").trim() || undefined,
-        leadSource: (row.线索来源 || "").trim() || undefined,
-        customerTier: (row.客户分层 || "").trim() || undefined,
+        nickname: toStr(row.昵称) || undefined,
+        city: toStr(row.城市) || undefined,
+        address: toStr(row.详细地址) || undefined,
+        industry: toStr(row.行业) || undefined,
+        leadSource: toStr(row.线索来源) || undefined,
+        customerTier: toStr(row.客户分层) || undefined,
         salesPersonId,
         status,
       });
@@ -201,13 +207,13 @@ export async function POST(req: Request) {
         status: "success",
         data: {
           客户名称: customerName,
-          昵称: (row.昵称 || "").trim() || undefined,
-          城市: (row.城市 || "").trim() || undefined,
-          详细地址: (row.详细地址 || "").trim() || undefined,
-          行业: (row.行业 || "").trim() || undefined,
-          线索来源: (row.线索来源 || "").trim() || undefined,
-          客户分层: (row.客户分层 || "").trim() || undefined,
-          销售人员邮箱: (row.销售人员邮箱 || "").trim() || undefined,
+          昵称: toStr(row.昵称) || undefined,
+          城市: toStr(row.城市) || undefined,
+          详细地址: toStr(row.详细地址) || undefined,
+          行业: toStr(row.行业) || undefined,
+          线索来源: toStr(row.线索来源) || undefined,
+          客户分层: toStr(row.客户分层) || undefined,
+          销售人员邮箱: toStr(row.销售人员邮箱) || undefined,
           状态: status,
         },
       });

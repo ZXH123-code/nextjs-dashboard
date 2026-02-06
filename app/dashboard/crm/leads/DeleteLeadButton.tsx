@@ -5,7 +5,15 @@ import { deleteLeadAction } from "@/app/lib/crm-actions";
 import { Button } from "@/components/ui/button";
 import { Trash2, AlertTriangle } from "lucide-react";
 
-export function DeleteLeadButton({ leadId, leadName }: { leadId: string; leadName: string }) {
+export function DeleteLeadButton({
+  leadId,
+  leadName,
+  hasOpportunity,
+}: {
+  leadId: string;
+  leadName: string;
+  hasOpportunity?: boolean;
+}) {
   const [open, setOpen] = useState(false);
 
   const handleConfirm = () => {
@@ -40,7 +48,8 @@ export function DeleteLeadButton({ leadId, leadName }: { leadId: string; leadNam
               <h2 className="text-sm font-semibold text-foreground">确认删除线索</h2>
             </div>
             <p className="mb-4 text-sm text-muted-foreground">
-              确定要删除线索「{leadName}」吗？此操作不可恢复，已关联的商机将保留，仅会与该线索断开关联。
+              确定要删除线索「{leadName}」吗？此操作不可恢复。
+              {hasOpportunity && " 该线索关联的商机及客户将一并删除。"}
             </p>
             <div className="flex justify-end gap-2">
               <Button

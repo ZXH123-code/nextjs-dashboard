@@ -5,6 +5,7 @@ import { auth } from "@/auth";
 export default async function Layout({ children }: { children: React.ReactNode }) {
   const session = await auth();
   const role = (session?.user as { role?: string })?.role ?? "sales";
+  const userName = (session?.user as { name?: string })?.name ?? session?.user?.email ?? "用户";
 
   return (
     <div className="flex h-screen flex-col md:flex-row md:overflow-hidden">
@@ -16,7 +17,7 @@ export default async function Layout({ children }: { children: React.ReactNode }
       {/* 主内容区 */}
       <div className="flex flex-col flex-1 md:overflow-hidden">
         {/* 顶部栏 */}
-        <TopBar />
+        <TopBar userName={userName} />
 
         {/* 页面内容 - overflow-y-auto 支持长表单滚动 */}
         <main className="flex-1 overflow-y-auto overflow-x-hidden bg-muted/30">

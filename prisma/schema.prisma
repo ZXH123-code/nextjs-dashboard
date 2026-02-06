@@ -16,11 +16,15 @@ model users {
   password String
   role     String? @default("sales") @db.VarChar(20) // admin=销售总管看全部, sales=销售人员只看自己的
 
-  crm_leads                  crm_lead[]
-  crm_opportunities          crm_opportunity[] @relation("opportunity_sales")
-  crm_opportunities_delivery crm_opportunity[] @relation("opportunity_delivery")
-  crm_customers              crm_customer[]
-  crm_follow_ups             crm_follow_up[]
+  crm_leads                          crm_lead[]
+  crm_opportunities                  crm_opportunity[]                   @relation("opportunity_sales")
+  crm_opportunities_delivery         crm_opportunity[]                   @relation("opportunity_delivery")
+  crm_customers                      crm_customer[]
+  crm_follow_ups                     crm_follow_up[]                     @relation("follow_up_creator")
+  crm_follow_ups_updated             crm_follow_up[]                     @relation("follow_up_updater")
+  crm_lead_notifications_as_old     crm_lead_assignment_notification[] @relation("notification_old_sales")
+  crm_lead_notifications_as_new     crm_lead_assignment_notification[] @relation("notification_new_sales")
+  crm_lead_notifications_created    crm_lead_assignment_notification[] @relation("notification_creator")
 }
 
 // ============ CRM 四张表 ============
@@ -40,9 +44,10 @@ model crm_lead {
   status        String   @default("未跟进") @db.VarChar(50) // 未跟进|跟进中|有意向|无意向
   isClaimed     Boolean  @default(false) @map("is_claimed")
 
-  salesPerson users?           @relation(fields: [salesPersonId], references: [id])
-  opportunity crm_opportunity?
-  followUps   crm_follow_up[]  // 该线索下的所有跟进记录
+  salesPerson            users?                              @relation(fields: [salesPersonId], references: [id])
+  opportunity            crm_opportunity?
+  followUps              crm_follow_up[] // 该线索下的所有跟进记录
+  assignmentNotifications crm_lead_assignment_notification[] // 该线索的销售人员变更通知
 
   @@index([status])
   @@index([salesPersonId])
@@ -116,7 +121,14 @@ model crm_follow_up {
   customerId    String?  @map("customer_id") @db.Uuid
   opportunityId String?  @map("opportunity_id") @db.Uuid
 
-  followUpBy  users            @relation(fields: [followUpById], references: [id])
+  // 审计字段
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt         DateTime? @map("updated_at") @db.Timestamp(6)
+  updatedById       String?   @map("updated_by_id") @db.Uuid
+  isSystemGenerated Boolean   @default(false) @map("is_system_generated") // 是否为系统自动生成（状态变更时）
+
+  followUpBy  users            @relation("follow_up_creator", fields: [followUpById], references: [id])
+  updatedBy   users?           @relation("follow_up_updater", fields: [updatedById], references: [id])
   lead        crm_lead?        @relation(fields: [leadId], references: [id])
   customer    crm_customer?    @relation(fields: [customerId], references: [id])
   opportunity crm_opportunity? @relation(fields: [opportunityId], references: [id])
@@ -125,7 +137,40 @@ model crm_follow_up {
   @@index([customerId])
   @@index([opportunityId])
   @@index([followDate])
+  @@index([createdAt])
   @@map("crm_follow_ups")
+}
+
+/// 线索销售人员变更通知：记录每次销售人员变更，用于发送邮件通知
+model crm_lead_assignment_notification {
+  id         String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  leadId     String   @map("lead_id") @db.Uuid
+  changeType String   @map("change_type") @db.VarChar(20) // "assigned" | "reassigned" | "unassigned"
+
+  // 变更前后的销售人员
+  oldSalesPersonId String? @map("old_sales_person_id") @db.Uuid
+  newSalesPersonId String? @map("new_sales_person_id") @db.Uuid
+
+  // 通知状态
+  notified   Boolean   @default(false)
+  notifiedAt DateTime? @map("notified_at") @db.Timestamp(6)
+
+  // 审计字段
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+  createdBy String   @map("created_by") @db.Uuid
+
+  // 关联
+  lead           crm_lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  oldSalesPerson users?   @relation("notification_old_sales", fields: [oldSalesPersonId], references: [id], onDelete: SetNull)
+  newSalesPerson users?   @relation("notification_new_sales", fields: [newSalesPersonId], references: [id], onDelete: SetNull)
+  operator       users    @relation("notification_creator", fields: [createdBy], references: [id])
+
+  @@index([leadId])
+  @@index([oldSalesPersonId])
+  @@index([newSalesPersonId])
+  @@index([notified])
+  @@index([createdAt])
+  @@map("crm_lead_assignment_notifications")
 }
 
 // ============ 以下为旧表（可后续清理） ============

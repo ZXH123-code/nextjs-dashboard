@@ -1,14 +1,27 @@
 import { getCustomers, getCrmAuth } from "@/app/lib/crm";
+import { CustomersTable } from "./CustomersTable";
 import Link from "next/link";
 import { lusitana } from "@/app/ui/fonts";
-import { Button } from "@/components/ui/button";
-import { FileText } from "lucide-react";
+import { auth } from "@/auth";
 
-export default async function CustomersPage() {
+type SearchParams = { highlight?: string };
+
+export default async function CustomersPage({
+  searchParams,
+}: {
+  searchParams: Promise<SearchParams>;
+}) {
+  const params = await searchParams;
+
   let customers: Awaited<ReturnType<typeof getCustomers>> = [];
+  let currentUserRole = "sales";
+  let currentUserId: string | undefined;
   try {
-    const auth = await getCrmAuth();
-    customers = await getCustomers(auth);
+    const crmAuth = await getCrmAuth();
+    customers = await getCustomers(crmAuth);
+    const session = await auth();
+    currentUserRole = (session?.user as { role?: string })?.role ?? "sales";
+    currentUserId = (session?.user as { id?: string })?.id;
   } catch (e) {
     console.error("获取客户失败:", e);
   }
@@ -25,76 +38,16 @@ export default async function CustomersPage() {
         </Link>
       </div>
 
-      <div className="rounded-lg border bg-card">
-        <table className="w-full text-left text-sm">
-          <thead className="border-b bg-muted/50">
-            <tr>
-              <th className="px-4 py-3 font-medium">客户名称</th>
-              <th className="px-4 py-3 font-medium">昵称</th>
-              <th className="px-4 py-3 font-medium">城市</th>
-              <th className="px-4 py-3 font-medium">客户分层</th>
-              <th className="px-4 py-3 font-medium">行业</th>
-              <th className="px-4 py-3 font-medium">初次维护日期</th>
-              <th className="px-4 py-3 font-medium">销售人员</th>
-              <th className="px-4 py-3 font-medium">状态</th>
-              <th className="px-4 py-3 font-medium">来源商机</th>
-              <th className="px-4 py-3 font-medium">操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            {customers.length === 0 ? (
-              <tr>
-                <td colSpan={10} className="px-4 py-8 text-center text-muted-foreground">
-                  暂无数据，点击「新建客户」添加，或从商机转入
-                </td>
-              </tr>
-            ) : (
-              customers.map((c) => (
-                <tr key={c.id} className="border-b last:border-0 hover:bg-muted/30">
-                  <td className="px-4 py-3">{c.name}</td>
-                  <td className="px-4 py-3">{c.nickname ?? "-"}</td>
-                  <td className="px-4 py-3">{c.city ?? "-"}</td>
-                  <td className="px-4 py-3">{c.customerTier ?? "-"}</td>
-                  <td className="px-4 py-3">{c.industry ?? "-"}</td>
-                  <td className="px-4 py-3">
-                    {c.firstMaintenanceDate
-                      ? c.firstMaintenanceDate.toLocaleDateString("zh-CN")
-                      : "-"}
-                  </td>
-                  <td className="px-4 py-3">{c.salesPerson?.name ?? "-"}</td>
-                  <td className="px-4 py-3">
-                    <span
-                      className={`inline-flex rounded-full px-2 py-0.5 text-xs ${c.status === "已签约"
-                          ? "bg-green-100 text-green-800"
-                          : c.status === "流失"
-                            ? "bg-red-100 text-red-800"
-                            : "bg-amber-100 text-amber-800"
-                        }`}
-                    >
-                      {c.status}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3">{c.opportunity?.name ?? "-"}</td>
-                  <td className="px-4 py-3">
-                    <Button variant="outline" size="sm" asChild>
-                      <Link
-                        href={`/dashboard/crm/follow-ups?customerId=${c.id}`}
-                        className="inline-flex items-center gap-1.5"
-                      >
-                        <FileText className="h-3.5 w-3.5" />
-                        跟进记录
-                      </Link>
-                    </Button>
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
+      <CustomersTable
+        customers={customers}
+        currentUserRole={currentUserRole}
+        currentUserId={currentUserId}
+        isAdmin={currentUserRole === "admin"}
+        highlightId={params.highlight}
+      />
 
       <p className="mt-4 text-sm text-muted-foreground">
-        客户来源于商机（待签约/已赢单时转入），或可直接新建
+        客户来源于商机（待签约/已赢单时转入），或可直接新建。管理员可编辑全部客户，销售人员可编辑自己负责的客户（点击客户名称、昵称、城市、客户分层、行业、初次维护日期进行表格内编辑）。
       </p>
     </main>
   );

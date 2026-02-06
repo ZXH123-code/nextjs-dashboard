@@ -16,7 +16,7 @@ import {
 import { cn } from "@/lib/utils";
 import { useState } from "react";
 
-export default function TopBar() {
+export default function TopBar({ userName }: { userName?: string }) {
   const pathname = usePathname();
   const [searchFocused, setSearchFocused] = useState(false);
 
@@ -38,7 +38,6 @@ export default function TopBar() {
           customers: "客户管理表",
           "follow-ups": "跟进记录",
           new: "新建",
-          invoices: "发票",
           list: "列表",
           import: "导入",
         };
@@ -191,18 +190,23 @@ export default function TopBar() {
             <Settings className="h-5 w-5" />
           </button>
 
-          {/* 用户中心 - 查看个人信息 */}
+          {/* 当前用户 + 用户中心 */}
           <Link
             href="/dashboard/profile"
             title="个人信息"
             className={cn(
-              "flex h-9 w-9 items-center justify-center rounded-full transition-all duration-200",
-              "bg-gradient-to-br from-blue-500 to-cyan-500 text-white",
-              "hover:shadow-lg hover:shadow-blue-500/50 hover:scale-110",
+              "flex items-center gap-2 h-9 pl-2 pr-2.5 rounded-full transition-all duration-200",
+              "bg-gradient-to-br from-blue-500 to-cyan-500 text-white text-sm font-medium",
+              "hover:shadow-lg hover:shadow-blue-500/50 hover:scale-[1.02]",
               "active:scale-95 ring-2 ring-background"
             )}
           >
-            <User className="h-5 w-5" />
+            <User className="h-4 w-4 shrink-0" />
+            {userName && (
+              <span className="hidden sm:inline max-w-[120px] truncate">
+                {userName}
+              </span>
+            )}
           </Link>
         </div>
       </div>

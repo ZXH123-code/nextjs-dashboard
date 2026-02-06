@@ -19,13 +19,22 @@ import {
   createOpportunity,
   createCustomer,
   createFollowUp,
+  updateCustomer,
   updateLead,
   updateLeadStatus,
   updateLeadSalesPerson,
   updateLeadSalesPersonBatch,
   deleteLead,
+  updateOpportunity,
   updateOpportunityStatus,
   opportunityToCustomer,
+  updateFollowUp,
+  deleteFollowUp,
+  recordLeadAssignmentChange,
+  recordLeadAssignmentChanges,
+  getPendingNotifications,
+  markNotificationsAsSent,
+  getCrmAuth,
 } from "./crm";
 import { sendLeadAssignmentNotification } from "./email";
 
@@ -48,9 +57,25 @@ export async function createLeadAction(formData: FormData) {
   });
   revalidatePath("/dashboard/crm/leads");
   revalidatePath("/dashboard");
+  redirect("/dashboard/crm/leads");
 }
 
-// 更新线索状态（改为「有意向」后，需到新建商机页选择该线索并完善商机信息）
+/** 新建一条空线索（仅 admin），用于表格内 Excel 风格补全 */
+export async function createEmptyLeadAction(): Promise<{ error?: string }> {
+  const session = await auth();
+  const role = (session?.user as { role?: string })?.role ?? "sales";
+  if (role !== "admin") return { error: "权限不足" };
+
+  await createLead({
+    customerName: "（待补全）",
+    status: "未跟进",
+  });
+  revalidatePath("/dashboard/crm/leads");
+  revalidatePath("/dashboard");
+  return {};
+}
+
+// 更新线索状态（改为「有意向」后，自动创建商机）
 export async function updateLeadStatusAction(leadId: string, status: string) {
   const session = await auth();
   const userId = (session?.user as { id?: string })?.id;
@@ -72,7 +97,7 @@ export async function updateLeadStatusFormAction(formData: FormData) {
   await updateLeadStatusAction(leadId, status);
 }
 
-// 编辑线索（仅 admin）
+// 编辑线索（仅 admin），支持表格行内编辑与表单编辑；客户名称可为空（存为「待补全」）
 export async function updateLeadAction(
   _prevState: { error?: string } | null,
   formData: FormData
@@ -84,11 +109,11 @@ export async function updateLeadAction(
   const leadId = formData.get("leadId") as string;
   if (!leadId) return { error: "缺少线索ID" };
 
-  const customerName = formData.get("customerName") as string;
-  if (!customerName?.trim()) return { error: "客户名称必填" };
+  const customerNameRaw = (formData.get("customerName") as string) ?? "";
+  const customerName = customerNameRaw.trim() ? customerNameRaw.trim() : "（待补全）";
 
   await updateLead(leadId, {
-    customerName: customerName.trim(),
+    customerName,
     nickname: (formData.get("nickname") as string) || undefined,
     city: (formData.get("city") as string) || undefined,
     address: (formData.get("address") as string) || undefined,
@@ -100,10 +125,12 @@ export async function updateLeadAction(
   });
   revalidatePath("/dashboard/crm/leads");
   revalidatePath("/dashboard");
-  redirect("/dashboard/crm/leads");
+  const isInline = formData.get("inline") === "1";
+  if (!isInline) redirect("/dashboard/crm/leads");
+  return {};
 }
 
-// 删除线索（仅 admin）
+// 删除线索（仅 admin）：强制删除线索，并级联删除关联的商机与客户
 export async function deleteLeadAction(formData: FormData) {
   const session = await auth();
   const role = (session?.user as { role?: string })?.role ?? "sales";
@@ -112,21 +139,11 @@ export async function deleteLeadAction(formData: FormData) {
   const leadId = formData.get("leadId") as string;
   if (!leadId) return;
 
-  const lead = await prisma.crm_lead.findUnique({
-    where: { id: leadId },
-    include: { opportunity: true },
-  });
-
-  // 若已有关联商机，则强制删除线索，但保留商机，仅断开关联
-  if (lead?.opportunity) {
-    await prisma.crm_opportunity.update({
-      where: { id: lead.opportunity.id },
-      data: { leadId: null },
-    });
-  }
-
-  await deleteLead(leadId);
+  const { deleteLeadWithCascade } = await import("@/app/lib/crm");
+  await deleteLeadWithCascade(leadId);
   revalidatePath("/dashboard/crm/leads");
+  revalidatePath("/dashboard/crm/opportunities");
+  revalidatePath("/dashboard/crm/customers");
   revalidatePath("/dashboard");
 }
 
@@ -186,45 +203,6 @@ export async function batchUpdateLeadSalesPersonAction(
   return {};
 }
 
-// 创建商机（若有关联线索可自动带出销售人员，否则用当前用户）
-export async function createOpportunityAction(formData: FormData) {
-  const name = formData.get("name") as string;
-  const leadId = (formData.get("leadId") as string) || undefined;
-  if (!name?.trim()) return { error: "商机名称必填" };
-  const session = await auth();
-  const currentUserId = (session?.user as { id?: string })?.id;
-  const role = (session?.user as { role?: string })?.role ?? "sales";
-
-  let salesPersonId: string | undefined;
-  if (role === "sales") {
-    // 销售人员只能创建给自己，忽略表单值
-    salesPersonId = currentUserId;
-  } else {
-    salesPersonId = (formData.get("salesPersonId") as string) || undefined;
-    if (leadId && !salesPersonId) {
-      const lead = await prisma.crm_lead.findUnique({
-        where: { id: leadId },
-        select: { salesPersonId: true },
-      });
-      salesPersonId = lead?.salesPersonId ?? undefined;
-    }
-    if (!salesPersonId) {
-      salesPersonId = currentUserId;
-    }
-  }
-
-  await createOpportunity({
-    name: name.trim(),
-    leadId,
-    productType: (formData.get("productType") as string) || undefined,
-    status: (formData.get("status") as string) || "初步沟通",
-    amount: formData.get("amount") ? Number(formData.get("amount")) : undefined,
-    salesPersonId,
-  });
-  revalidatePath("/dashboard/crm/opportunities");
-  revalidatePath("/dashboard");
-}
-
 // 更新商机状态，若为「待签约」或「已赢单」则自动转客户
 export async function updateOpportunityStatusAction(
   opportunityId: string,
@@ -247,6 +225,54 @@ export async function updateOpportunityStatusAction(
   revalidatePath("/dashboard/crm/opportunities");
   revalidatePath("/dashboard/crm/customers");
   revalidatePath("/dashboard");
+}
+
+// 更新商机（编辑/补全商机表单）
+export async function updateOpportunityAction(
+  _prevState: { error?: string } | null,
+  formData: FormData
+): Promise<{ error?: string } | null> {
+  const session = await auth();
+  const userId = (session?.user as { id?: string })?.id;
+  const role = (session?.user as { role?: string })?.role ?? "sales";
+  if (!userId) return { error: "未登录" };
+
+  const opportunityId = formData.get("opportunityId") as string;
+  if (!opportunityId) return { error: "缺少商机ID" };
+
+  const opp = await prisma.crm_opportunity.findUnique({
+    where: { id: opportunityId },
+    select: { salesPersonId: true },
+  });
+  if (!(await checkCrmPermission(userId, role, opp))) {
+    return { error: "无权限" };
+  }
+
+  const name = formData.get("name") as string;
+  if (!name?.trim()) return { error: "商机名称必填" };
+
+  const amountStr = formData.get("amount") as string;
+  const amount = amountStr ? Number(amountStr) : undefined;
+
+  const expectedCloseDateStr = formData.get("expectedCloseDate") as string;
+  const expectedCloseDate = expectedCloseDateStr ? new Date(expectedCloseDateStr) : undefined;
+
+  await updateOpportunity(opportunityId, {
+    name: name.trim(),
+    productType: (formData.get("productType") as string) || undefined,
+    status: (formData.get("status") as string) || undefined,
+    amount,
+    expectedCloseDate,
+    salesPersonId: role === "admin" ? ((formData.get("salesPersonId") as string) || undefined) : undefined,
+    deliveryPersonId: (formData.get("deliveryPersonId") as string) || undefined,
+  });
+
+  revalidatePath("/dashboard/crm/opportunities");
+  revalidatePath("/dashboard/crm/leads");
+  revalidatePath("/dashboard");
+  const isInline = formData.get("inline") === "1";
+  if (!isInline) redirect("/dashboard/crm/opportunities");
+  return {};
 }
 
 // 从表单更新商机状态（用于 select 的 form action）
@@ -297,6 +323,55 @@ export async function createCustomerAction(formData: FormData) {
   });
   revalidatePath("/dashboard/crm/customers");
   revalidatePath("/dashboard");
+  redirect("/dashboard/crm/customers");
+}
+
+// 更新客户（表格行内编辑，仅 admin 或该客户负责人可编辑）
+export async function updateCustomerAction(
+  _prevState: { error?: string } | null,
+  formData: FormData
+): Promise<{ error?: string } | null> {
+  const session = await auth();
+  const userId = (session?.user as { id?: string })?.id;
+  const role = (session?.user as { role?: string })?.role ?? "sales";
+  if (!userId) return { error: "未登录" };
+
+  const customerId = formData.get("customerId") as string;
+  if (!customerId) return { error: "缺少客户ID" };
+
+  const customer = await prisma.crm_customer.findUnique({
+    where: { id: customerId },
+    select: { salesPersonId: true },
+  });
+  if (!(await checkCrmPermission(userId, role, customer))) {
+    return { error: "无权限" };
+  }
+
+  const name = (formData.get("name") as string)?.trim();
+  if (!name) return { error: "客户名称必填" };
+
+  const firstMaintenanceDateStr = (formData.get("firstMaintenanceDate") as string)?.trim();
+  const firstMaintenanceDate = firstMaintenanceDateStr
+    ? new Date(firstMaintenanceDateStr)
+    : null;
+
+  await updateCustomer(customerId, {
+    name,
+    nickname: (formData.get("nickname") as string) || undefined,
+    city: (formData.get("city") as string) || undefined,
+    customerTier: (formData.get("customerTier") as string) || undefined,
+    industry: (formData.get("industry") as string) || undefined,
+    firstMaintenanceDate,
+    employeeCount: (formData.get("employeeCount") as string) || undefined,
+    tags: (formData.get("tags") as string) || undefined,
+    mainProducts: (formData.get("mainProducts") as string) || undefined,
+  });
+
+  revalidatePath("/dashboard/crm/customers");
+  revalidatePath("/dashboard");
+  const isInline = formData.get("inline") === "1";
+  if (!isInline) redirect("/dashboard/crm/customers");
+  return {};
 }
 
 // 创建跟进记录
@@ -320,6 +395,7 @@ export async function createFollowUpAction(prevState: { error?: string } | null,
     content: content.trim(),
     followUpById,
     followDate: new Date(followDate),
+    leadId: (formData.get("leadId") as string) || undefined,
     customerId: (formData.get("customerId") as string) || undefined,
     opportunityId: (formData.get("opportunityId") as string) || undefined,
     contactPerson: (formData.get("contactPerson") as string) || undefined,
@@ -328,7 +404,610 @@ export async function createFollowUpAction(prevState: { error?: string } | null,
     customerNeeds: (formData.get("customerNeeds") as string) || undefined,
   });
   revalidatePath("/dashboard/crm/follow-ups");
+  revalidatePath("/dashboard/crm/leads");
   revalidatePath("/dashboard/crm/customers");
   revalidatePath("/dashboard/crm/opportunities");
   redirect("/dashboard/crm/follow-ups");
+}
+
+// ============ 跟进记录增强：状态变更时自动创建 ============
+
+/** 线索状态变更时创建跟进记录（前端传入补充说明） */
+export async function updateLeadStatusWithFollowUpAction(
+  leadId: string,
+  newStatus: string,
+  followUpContent: string // 前端传入的跟进补充说明（包含默认的状态变更文本）
+) {
+  const session = await auth();
+  const userId = (session?.user as { id?: string })?.id;
+  const role = (session?.user as { role?: string })?.role ?? "sales";
+  if (!userId) return { error: "未登录" };
+
+  const lead = await prisma.crm_lead.findUnique({
+    where: { id: leadId },
+    include: { 
+      opportunity: true,
+      salesPerson: { select: { id: true } },
+    },
+  });
+  if (!lead) return { error: "线索不存在" };
+  if (!(await checkCrmPermission(userId, role, { salesPersonId: lead.salesPersonId }))) {
+    return { error: "无权限" };
+  }
+
+  // 更新状态
+  await updateLeadStatus(leadId, newStatus);
+
+  // 如果状态变更为「有意向」且还未创建商机，自动创建商机（默认名称：客户名称-商机）
+  if (newStatus === "有意向" && !lead.opportunity) {
+    const defaultName = lead.customerName?.trim() ? `${lead.customerName.trim()}-商机` : "（待补全）-商机";
+    await createOpportunity({
+      name: defaultName,
+      leadId: leadId,
+      status: "初步沟通",
+      salesPersonId: lead.salesPersonId ?? userId,
+    });
+  }
+
+  // 创建跟进记录
+  await createFollowUp({
+    content: followUpContent.trim(),
+    followUpById: userId,
+    followDate: new Date(),
+    leadId,
+    isSystemGenerated: true, // 标记为状态变更自动生成
+  });
+
+  revalidatePath("/dashboard/crm/leads");
+  revalidatePath("/dashboard/crm/opportunities");
+  revalidatePath("/dashboard");
+  return { success: true };
+}
+
+/** 线索分配销售人员时创建跟进记录 */
+export async function updateLeadSalesPersonWithFollowUpAction(
+  leadId: string,
+  salesPersonId: string | null,
+  followUpContent: string
+) {
+  const session = await auth();
+  const userId = (session?.user as { id?: string })?.id;
+  const role = (session?.user as { role?: string })?.role ?? "sales";
+  if (!userId) return { error: "未登录" };
+
+  const lead = await prisma.crm_lead.findUnique({
+    where: { id: leadId },
+    select: { salesPersonId: true },
+  });
+  if (!lead || !(await checkCrmPermission(userId, role, lead))) {
+    return { error: "无权限或线索不存在" };
+  }
+
+  const oldSalesPersonId = lead.salesPersonId;
+
+  // 更新销售人员
+  await updateLeadSalesPerson(leadId, salesPersonId);
+
+  // 记录变更通知（如果销售人员发生了变化）
+  if (oldSalesPersonId !== salesPersonId) {
+    await recordLeadAssignmentChange({
+      leadId,
+      oldSalesPersonId,
+      newSalesPersonId: salesPersonId,
+      createdBy: userId,
+    });
+  }
+
+  // 创建跟进记录（由被分配的销售人员作为跟进人）
+  if (salesPersonId && followUpContent.trim()) {
+    await createFollowUp({
+      content: followUpContent.trim(),
+      followUpById: salesPersonId, // 被分配的销售人员
+      followDate: new Date(),
+      leadId,
+      isSystemGenerated: true,
+    });
+  }
+
+  revalidatePath("/dashboard/crm/leads");
+  revalidatePath("/dashboard");
+  return { success: true };
+}
+
+/** 批量分配销售人员时创建跟进记录（更新版本） */
+export async function batchUpdateLeadSalesPersonWithFollowUpAction(
+  leadIds: string[],
+  salesPersonId: string,
+  followUpContent: string
+): Promise<{
+  error?: string;
+  salesPersonMap?: Record<
+    string,
+    { name: string; email: string; leadIds: string[]; leadNames: string[] }
+  >;
+}> {
+  const session = await auth();
+  const userId = (session?.user as { id?: string })?.id;
+  const role = (session?.user as { role?: string })?.role ?? "sales";
+  if (!userId) return { error: "未登录" };
+  if (role !== "admin") return { error: "无权限" };
+  if (!leadIds?.length || !salesPersonId) return { error: "参数无效" };
+
+  // 先查询原有的销售人员信息
+  const oldLeads = await prisma.crm_lead.findMany({
+    where: { id: { in: leadIds } },
+    select: { id: true, customerName: true, salesPersonId: true },
+  });
+
+  // 批量更新销售人员
+  await updateLeadSalesPersonBatch(leadIds, salesPersonId);
+
+  // 批量记录变更通知
+  const leadChanges = oldLeads.map((lead) => ({
+    leadId: lead.id,
+    oldSalesPersonId: lead.salesPersonId,
+    newSalesPersonId: salesPersonId,
+  }));
+  await recordLeadAssignmentChanges(leadChanges, userId);
+
+  // 为每个线索创建跟进记录
+  if (followUpContent.trim()) {
+    await Promise.all(
+      leadIds.map((leadId) =>
+        createFollowUp({
+          content: followUpContent.trim(),
+          followUpById: salesPersonId,
+          followDate: new Date(),
+          leadId,
+          isSystemGenerated: true,
+        })
+      )
+    );
+  }
+
+  // 收集所有受影响的销售人员（新指定的 + 被替换的旧销售）
+  const affectedSalesPersonIds = new Set<string>();
+  affectedSalesPersonIds.add(salesPersonId); // 新指定的销售
+
+  oldLeads.forEach((lead) => {
+    if (lead.salesPersonId && lead.salesPersonId !== salesPersonId) {
+      affectedSalesPersonIds.add(lead.salesPersonId); // 被替换的旧销售
+    }
+  });
+
+  // 查询所有受影响销售人员的信息
+  const salesPersons = await prisma.users.findMany({
+    where: { id: { in: Array.from(affectedSalesPersonIds) } },
+    select: { id: true, name: true, email: true },
+  });
+
+  // 构建每个销售人员对应的线索列表
+  const salesPersonMap: Record<
+    string,
+    { name: string; email: string; leadIds: string[]; leadNames: string[] }
+  > = {};
+
+  // 为新指定的销售构建数据（显示所有新分配给他的线索）
+  const newSalesPerson = salesPersons.find((sp) => sp.id === salesPersonId);
+  if (newSalesPerson && newSalesPerson.email) {
+    salesPersonMap[salesPersonId] = {
+      name: newSalesPerson.name,
+      email: newSalesPerson.email,
+      leadIds: oldLeads.map((l) => l.id),
+      leadNames: oldLeads.map((l) => l.customerName),
+    };
+  }
+
+  // 为被替换的旧销售构建数据（只显示从他那里被转走的线索）
+  const oldSalesPersons = salesPersons.filter((sp) => sp.id !== salesPersonId);
+  oldSalesPersons.forEach((sp) => {
+    const lostLeads = oldLeads.filter((lead) => lead.salesPersonId === sp.id);
+    if (lostLeads.length > 0 && sp.email) {
+      salesPersonMap[sp.id] = {
+        name: sp.name,
+        email: sp.email,
+        leadIds: lostLeads.map((l) => l.id),
+        leadNames: lostLeads.map((l) => l.customerName),
+      };
+    }
+  });
+
+  revalidatePath("/dashboard/crm/leads");
+  revalidatePath("/dashboard");
+  return { salesPersonMap };
+}
+
+/** 批量发送线索指定邮件通知 */
+export async function sendBatchLeadAssignmentNotificationsAction(
+  salesPersonIds: string[],
+  salesPersonMap: Record<
+    string,
+    { name: string; email: string; leadIds: string[]; leadNames: string[] }
+  >
+): Promise<{
+  success: string[];
+  failed: { id: string; name: string; error: string }[];
+}> {
+  const session = await auth();
+  const role = (session?.user as { role?: string })?.role ?? "sales";
+  if (role !== "admin") {
+    return { success: [], failed: [] };
+  }
+
+  const success: string[] = [];
+  const failed: { id: string; name: string; error: string }[] = [];
+
+  await Promise.all(
+    salesPersonIds.map(async (id) => {
+      const person = salesPersonMap[id];
+      if (!person) return;
+
+      const leads = person.leadIds.map((leadId, idx) => ({
+        id: leadId,
+        customerName: person.leadNames[idx],
+      }));
+
+      const result = await sendLeadAssignmentNotification(
+        person.email,
+        person.name,
+        leads
+      );
+
+      if (result.success) {
+        success.push(id);
+      } else {
+        failed.push({
+          id,
+          name: person.name,
+          error: result.error || "未知错误",
+        });
+      }
+    })
+  );
+
+  return { success, failed };
+}
+
+/** 商机状态变更时创建跟进记录 */
+export async function updateOpportunityStatusWithFollowUpAction(
+  opportunityId: string,
+  newStatus: string,
+  followUpContent: string,
+  lostReason?: string
+) {
+  const session = await auth();
+  const userId = (session?.user as { id?: string })?.id;
+  const role = (session?.user as { role?: string })?.role ?? "sales";
+  if (!userId) return { error: "未登录" };
+
+  const opp = await prisma.crm_opportunity.findUnique({
+    where: { id: opportunityId },
+    select: { salesPersonId: true },
+  });
+  if (!(await checkCrmPermission(userId, role, opp))) {
+    return { error: "无权限" };
+  }
+
+  // 更新状态
+  await updateOpportunityStatus(opportunityId, newStatus, lostReason);
+
+  // 创建跟进记录
+  await createFollowUp({
+    content: followUpContent.trim(),
+    followUpById: userId,
+    followDate: new Date(),
+    opportunityId,
+    isSystemGenerated: true,
+  });
+
+  // 若状态为「待签约」或「已赢单」，自动转客户
+  if (["待签约", "已赢单"].includes(newStatus)) {
+    await opportunityToCustomer(opportunityId);
+  }
+
+  revalidatePath("/dashboard/crm/opportunities");
+  revalidatePath("/dashboard/crm/customers");
+  revalidatePath("/dashboard");
+  return { success: true };
+}
+
+/** 客户状态变更时创建跟进记录 */
+export async function updateCustomerStatusWithFollowUpAction(
+  customerId: string,
+  newStatus: string,
+  followUpContent: string
+) {
+  const session = await auth();
+  const userId = (session?.user as { id?: string })?.id;
+  const role = (session?.user as { role?: string })?.role ?? "sales";
+  if (!userId) return { error: "未登录" };
+
+  const customer = await prisma.crm_customer.findUnique({
+    where: { id: customerId },
+    select: { salesPersonId: true },
+  });
+  if (!(await checkCrmPermission(userId, role, customer))) {
+    return { error: "无权限" };
+  }
+
+  // 更新客户状态
+  await prisma.crm_customer.update({
+    where: { id: customerId },
+    data: { status: newStatus },
+  });
+
+  // 创建跟进记录
+  await createFollowUp({
+    content: followUpContent.trim(),
+    followUpById: userId,
+    followDate: new Date(),
+    customerId,
+    isSystemGenerated: true,
+  });
+
+  revalidatePath("/dashboard/crm/customers");
+  revalidatePath("/dashboard");
+  return { success: true };
+}
+
+/** 手动添加跟进记录（不关联状态变更） */
+export async function createManualFollowUpAction(data: {
+  content: string;
+  leadId?: string;
+  customerId?: string;
+  opportunityId?: string;
+  contactPerson?: string;
+  summary?: string;
+  nextStep?: string;
+  customerNeeds?: string;
+}) {
+  const session = await auth();
+  const userId = (session?.user as { id?: string })?.id;
+  if (!userId) return { error: "未登录" };
+
+  await createFollowUp({
+    content: data.content.trim(),
+    followUpById: userId,
+    followDate: new Date(),
+    leadId: data.leadId,
+    customerId: data.customerId,
+    opportunityId: data.opportunityId,
+    contactPerson: data.contactPerson,
+    summary: data.summary,
+    nextStep: data.nextStep,
+    customerNeeds: data.customerNeeds,
+    isSystemGenerated: false,
+  });
+
+  revalidatePath("/dashboard/crm/leads");
+  revalidatePath("/dashboard/crm/customers");
+  revalidatePath("/dashboard/crm/opportunities");
+  revalidatePath("/dashboard/crm/follow-ups");
+  return { success: true };
+}
+
+/** 更新跟进记录（仅 admin） */
+export async function updateFollowUpAction(
+  id: string,
+  data: {
+    content?: string;
+    followDate?: string;
+    contactPerson?: string;
+    summary?: string;
+    nextStep?: string;
+    customerNeeds?: string;
+    status?: string;
+  }
+) {
+  const session = await auth();
+  const userId = (session?.user as { id?: string })?.id;
+  const role = (session?.user as { role?: string })?.role ?? "sales";
+  if (role !== "admin") return { error: "无权限" };
+  if (!userId) return { error: "未登录" };
+
+  await updateFollowUp(
+    id,
+    {
+      ...data,
+      followDate: data.followDate ? new Date(data.followDate) : undefined,
+    },
+    userId
+  );
+
+  revalidatePath("/dashboard/crm/follow-ups");
+  revalidatePath("/dashboard/crm/leads");
+  revalidatePath("/dashboard/crm/customers");
+  revalidatePath("/dashboard/crm/opportunities");
+  return { success: true };
+}
+
+/** 删除跟进记录（仅 admin） */
+export async function deleteFollowUpAction(id: string) {
+  const session = await auth();
+  const role = (session?.user as { role?: string })?.role ?? "sales";
+  if (role !== "admin") return { error: "无权限" };
+
+  await deleteFollowUp(id);
+
+  revalidatePath("/dashboard/crm/follow-ups");
+  revalidatePath("/dashboard/crm/leads");
+  revalidatePath("/dashboard/crm/customers");
+  revalidatePath("/dashboard/crm/opportunities");
+  return { success: true };
+}
+
+// ============ 线索销售人员变更邮件通知 ============
+
+/** 获取待通知的销售人员列表（按人员分组） */
+export async function getPendingNotificationSummaryAction(): Promise<{
+  salesPersons: Array<{
+    id: string;
+    name: string;
+    email: string;
+    assignedCount: number; // 新接手的线索数
+    unassignedCount: number; // 被转走的线索数
+  }>;
+}> {
+  const auth = await getCrmAuth();
+  if (!auth) return { salesPersons: [] };
+
+  const notifications = await getPendingNotifications(auth);
+
+  // 按销售人员分组统计
+  const groupedMap = new Map<
+    string,
+    {
+      id: string;
+      name: string;
+      email: string;
+      assignedLeads: Array<{ id: string; name: string }>;
+      unassignedLeads: Array<{ id: string; name: string }>;
+    }
+  >();
+
+  notifications.forEach((notif: typeof notifications[0]) => {
+    // 新接手的销售人员（newSalesPerson）
+    if (notif.newSalesPerson && notif.newSalesPersonId) {
+      if (!groupedMap.has(notif.newSalesPersonId)) {
+        groupedMap.set(notif.newSalesPersonId, {
+          id: notif.newSalesPersonId,
+          name: notif.newSalesPerson.name,
+          email: notif.newSalesPerson.email || "",
+          assignedLeads: [],
+          unassignedLeads: [],
+        });
+      }
+      groupedMap.get(notif.newSalesPersonId)!.assignedLeads.push({
+        id: notif.lead.id,
+        name: notif.lead.customerName,
+      });
+    }
+
+    // 被转走的销售人员（oldSalesPerson）
+    if (notif.oldSalesPerson && notif.oldSalesPersonId) {
+      if (!groupedMap.has(notif.oldSalesPersonId)) {
+        groupedMap.set(notif.oldSalesPersonId, {
+          id: notif.oldSalesPersonId,
+          name: notif.oldSalesPerson.name,
+          email: notif.oldSalesPerson.email || "",
+          assignedLeads: [],
+          unassignedLeads: [],
+        });
+      }
+      groupedMap.get(notif.oldSalesPersonId)!.unassignedLeads.push({
+        id: notif.lead.id,
+        name: notif.lead.customerName,
+      });
+    }
+  });
+
+  const salesPersons = Array.from(groupedMap.values())
+    .filter((sp) => sp.email) // 只包含有邮箱的
+    .map((sp) => ({
+      id: sp.id,
+      name: sp.name,
+      email: sp.email,
+      assignedCount: sp.assignedLeads.length,
+      unassignedCount: sp.unassignedLeads.length,
+    }));
+
+  return { salesPersons };
+}
+
+/** 发送待通知邮件（给选中的销售人员） */
+export async function sendPendingNotificationsAction(
+  salesPersonIds: string[]
+): Promise<{
+  success: string[];
+  failed: Array<{ id: string; name: string; error: string }>;
+}> {
+  const auth = await getCrmAuth();
+  if (!auth) return { success: [], failed: [] };
+
+  const notifications = await getPendingNotifications(auth);
+
+  // 按销售人员分组
+  const groupedMap = new Map<
+    string,
+    {
+      name: string;
+      email: string;
+      assignedLeads: Array<{ id: string; customerName: string }>;
+      unassignedLeads: Array<{ id: string; customerName: string }>;
+      notificationIds: string[];
+    }
+  >();
+
+  notifications.forEach((notif: typeof notifications[0]) => {
+    // 新接手的
+    if (notif.newSalesPersonId && salesPersonIds.includes(notif.newSalesPersonId)) {
+      if (!groupedMap.has(notif.newSalesPersonId)) {
+        groupedMap.set(notif.newSalesPersonId, {
+          name: notif.newSalesPerson!.name,
+          email: notif.newSalesPerson!.email || "",
+          assignedLeads: [],
+          unassignedLeads: [],
+          notificationIds: [],
+        });
+      }
+      const group = groupedMap.get(notif.newSalesPersonId)!;
+      group.assignedLeads.push({
+        id: notif.lead.id,
+        customerName: notif.lead.customerName,
+      });
+      group.notificationIds.push(notif.id);
+    }
+
+    // 被转走的
+    if (notif.oldSalesPersonId && salesPersonIds.includes(notif.oldSalesPersonId)) {
+      if (!groupedMap.has(notif.oldSalesPersonId)) {
+        groupedMap.set(notif.oldSalesPersonId, {
+          name: notif.oldSalesPerson!.name,
+          email: notif.oldSalesPerson!.email || "",
+          assignedLeads: [],
+          unassignedLeads: [],
+          notificationIds: [],
+        });
+      }
+      const group = groupedMap.get(notif.oldSalesPersonId)!;
+      group.unassignedLeads.push({
+        id: notif.lead.id,
+        customerName: notif.lead.customerName,
+      });
+      group.notificationIds.push(notif.id);
+    }
+  });
+
+  const success: string[] = [];
+  const failed: Array<{ id: string; name: string; error: string }> = [];
+
+  // 逐个发送邮件
+  for (const [salesPersonId, group] of groupedMap.entries()) {
+    if (!group.email) {
+      failed.push({ id: salesPersonId, name: group.name, error: "邮箱为空" });
+      continue;
+    }
+
+    // 调用发送邮件（分别传递新接手和被转走的线索）
+    const result = await sendLeadAssignmentNotification(
+      group.email,
+      group.name,
+      group.assignedLeads,
+      group.unassignedLeads
+    );
+
+    if (result.success) {
+      success.push(salesPersonId);
+      // 标记为已发送
+      await markNotificationsAsSent(group.notificationIds);
+    } else {
+      failed.push({
+        id: salesPersonId,
+        name: group.name,
+        error: result.error || "未知错误",
+      });
+    }
+  }
+
+  return { success, failed };
 }

@@ -64,7 +64,9 @@ export async function getLeads(auth: CrmAuth) {
     orderBy: { createdAt: "desc" },
     include: {
       salesPerson: { select: { id: true, name: true } },
-      opportunity: { select: { id: true, name: true } },
+      opportunity: {
+        select: { id: true, name: true, customer: { select: { id: true } } },
+      },
     },
   });
 }
@@ -167,6 +169,40 @@ export async function deleteLead(id: string) {
   return prisma.crm_lead.delete({ where: { id } });
 }
 
+/** 管理员强制删除线索：级联删除关联的商机、客户，并解除跟进记录关联 */
+export async function deleteLeadWithCascade(leadId: string) {
+  const lead = await prisma.crm_lead.findUnique({
+    where: { id: leadId },
+    include: { opportunity: { include: { customer: true } } },
+  });
+  if (!lead) return;
+
+  const opportunity = lead.opportunity;
+  const customer = opportunity?.customer ?? null;
+
+  await prisma.$transaction(async (tx) => {
+    if (customer) {
+      await tx.crm_follow_up.updateMany({
+        where: { customerId: customer.id },
+        data: { customerId: null },
+      });
+      await tx.crm_customer.delete({ where: { id: customer.id } });
+    }
+    if (opportunity) {
+      await tx.crm_follow_up.updateMany({
+        where: { opportunityId: opportunity.id },
+        data: { opportunityId: null },
+      });
+      await tx.crm_opportunity.delete({ where: { id: opportunity.id } });
+    }
+    await tx.crm_follow_up.updateMany({
+      where: { leadId },
+      data: { leadId: null },
+    });
+    await tx.crm_lead.delete({ where: { id: leadId } });
+  });
+}
+
 // ============ 商机 ============
 export async function getOpportunities(auth: CrmAuth) {
   const where = !auth ? emptyWhere : auth.role === "admin" ? {} : salesFilter(auth.userId);
@@ -176,6 +212,7 @@ export async function getOpportunities(auth: CrmAuth) {
     include: {
       lead: { select: { id: true, customerName: true } },
       salesPerson: { select: { id: true, name: true } },
+      deliveryPerson: { select: { id: true, name: true } },
       customer: { select: { id: true, name: true } },
     },
   });
@@ -201,6 +238,34 @@ export async function createOpportunity(data: {
       expectedCloseDate: data.expectedCloseDate,
       salesPersonId: data.salesPersonId,
       deliveryPersonId: data.deliveryPersonId,
+    },
+  });
+}
+
+export async function updateOpportunity(
+  id: string,
+  data: {
+    name?: string;
+    productType?: string;
+    status?: string;
+    amount?: number;
+    expectedCloseDate?: Date;
+    salesPersonId?: string;
+    deliveryPersonId?: string;
+    lostReason?: string;
+  }
+) {
+  return prisma.crm_opportunity.update({
+    where: { id },
+    data: {
+      name: data.name,
+      productType: data.productType,
+      status: data.status,
+      amount: data.amount,
+      expectedCloseDate: data.expectedCloseDate,
+      salesPersonId: data.salesPersonId,
+      deliveryPersonId: data.deliveryPersonId,
+      lostReason: data.lostReason,
     },
   });
 }
@@ -255,7 +320,38 @@ export async function createCustomer(data: {
   });
 }
 
+export async function updateCustomer(
+  id: string,
+  data: {
+    name?: string;
+    nickname?: string;
+    city?: string;
+    customerTier?: string;
+    industry?: string;
+    firstMaintenanceDate?: Date | null;
+    employeeCount?: string;
+    tags?: string;
+    mainProducts?: string;
+  }
+) {
+  return prisma.crm_customer.update({
+    where: { id },
+    data: {
+      name: data.name,
+      nickname: data.nickname,
+      city: data.city,
+      customerTier: data.customerTier,
+      industry: data.industry,
+      firstMaintenanceDate: data.firstMaintenanceDate,
+      employeeCount: data.employeeCount,
+      tags: data.tags,
+      mainProducts: data.mainProducts,
+    },
+  });
+}
+
 // ============ 跟进记录 ============
+/** 跟进记录列表。无 filters 时：admin 看全部，sales 仅看自己跟进或自己负责的线索/商机/客户的记录 */
 export async function getFollowUps(
   auth: CrmAuth,
   filters?: { leadId?: string; customerId?: string; opportunityId?: string }
@@ -280,7 +376,6 @@ export async function getFollowUps(
     orderBy: { followDate: "desc" },
     include: {
       followUpBy: { select: { id: true, name: true } },
-      // @ts-expect-error: Prisma 类型暂未包含 lead 关联，实际运行时字段存在
       lead: { select: { id: true, customerName: true } },
       customer: { select: { id: true, name: true } },
       opportunity: { select: { id: true, name: true } },
@@ -300,13 +395,13 @@ export async function createFollowUp(data: {
   nextStep?: string;
   customerNeeds?: string;
   status?: string;
+  isSystemGenerated?: boolean; // 是否为系统自动生成（状态变更时）
 }) {
   return prisma.crm_follow_up.create({
     data: {
       content: data.content,
       followUpById: data.followUpById,
       followDate: data.followDate,
-      // @ts-expect-error: Prisma 类型暂未包含 leadId 字段，实际运行时字段存在
       leadId: data.leadId,
       customerId: data.customerId,
       opportunityId: data.opportunityId,
@@ -315,8 +410,122 @@ export async function createFollowUp(data: {
       nextStep: data.nextStep,
       customerNeeds: data.customerNeeds,
       status: data.status,
+      isSystemGenerated: data.isSystemGenerated ?? false,
     },
   });
+}
+
+/** 获取跟进时间线（按创建时间倒序），用于展示完整历史记录。
+ * - 按 leadId：该线索的全部跟进。
+ * - 按 opportunityId：该商机 + 关联线索的全部跟进（覆盖线索→商机全过程）。
+ * - 按 customerId：该客户 + 来源商机 + 关联线索的全部跟进（覆盖线索→商机→客户全过程）。 */
+export async function getFollowUpTimeline(
+  auth: CrmAuth,
+  filters: { leadId?: string; customerId?: string; opportunityId?: string }
+) {
+  if (!filters.leadId && !filters.customerId && !filters.opportunityId) {
+    throw new Error("必须提供 leadId、customerId 或 opportunityId 之一");
+  }
+
+  let contentWhere: Record<string, unknown> = {};
+  if (filters.leadId) {
+    contentWhere.leadId = filters.leadId;
+  } else if (filters.customerId) {
+    const customer = await prisma.crm_customer.findUnique({
+      where: { id: filters.customerId },
+      select: { opportunityId: true, opportunity: { select: { leadId: true } } },
+    });
+    if (customer?.opportunityId) {
+      const leadId = customer.opportunity?.leadId ?? null;
+      contentWhere.OR = [
+        { customerId: filters.customerId },
+        { opportunityId: customer.opportunityId },
+        ...(leadId ? [{ leadId }] : []),
+      ];
+    } else {
+      contentWhere.customerId = filters.customerId;
+    }
+  } else if (filters.opportunityId) {
+    const opp = await prisma.crm_opportunity.findUnique({
+      where: { id: filters.opportunityId },
+      select: { leadId: true },
+    });
+    if (opp?.leadId) {
+      contentWhere.OR = [
+        { opportunityId: filters.opportunityId },
+        { leadId: opp.leadId },
+      ];
+    } else {
+      contentWhere.opportunityId = filters.opportunityId;
+    }
+  }
+
+  let where: Record<string, unknown>;
+  if (!auth) {
+    where = { AND: [contentWhere, { id: "00000000-0000-0000-0000-000000000000" }] };
+  } else if (auth.role === "sales" && auth.userId) {
+    where = {
+      AND: [
+        contentWhere,
+        {
+          OR: [
+            { lead: { salesPersonId: auth.userId } },
+            { customer: { salesPersonId: auth.userId } },
+            { opportunity: { salesPersonId: auth.userId } },
+          ],
+        },
+      ],
+    };
+  } else {
+    where = contentWhere;
+  }
+
+  return prisma.crm_follow_up.findMany({
+    where,
+    orderBy: { createdAt: "desc" }, // 按创建时间倒序
+    include: {
+      followUpBy: { select: { id: true, name: true } },
+      updatedBy: { select: { id: true, name: true } },
+      lead: { select: { id: true, customerName: true } },
+      customer: { select: { id: true, name: true } },
+      opportunity: { select: { id: true, name: true } },
+    },
+  });
+}
+
+/** 更新跟进记录（仅 admin 可用） */
+export async function updateFollowUp(
+  id: string,
+  data: {
+    content?: string;
+    followDate?: Date;
+    contactPerson?: string;
+    summary?: string;
+    nextStep?: string;
+    customerNeeds?: string;
+    status?: string;
+  },
+  updatedById: string
+) {
+  return prisma.crm_follow_up.update({
+    where: { id },
+    data: {
+      ...(data.content !== undefined && { content: data.content }),
+      ...(data.followDate !== undefined && { followDate: data.followDate }),
+      ...(data.contactPerson !== undefined && { contactPerson: data.contactPerson }),
+      ...(data.summary !== undefined && { summary: data.summary }),
+      ...(data.nextStep !== undefined && { nextStep: data.nextStep }),
+      ...(data.customerNeeds !== undefined && { customerNeeds: data.customerNeeds }),
+      ...(data.status !== undefined && { status: data.status }),
+      updatedAt: new Date(),
+      updatedById,
+    },
+  });
+}
+
+/** 删除跟进记录（仅 admin 可用） */
+export async function deleteFollowUp(id: string) {
+  return prisma.crm_follow_up.delete({ where: { id } });
 }
 
 // ============ 状态流转（核心逻辑） ============
@@ -358,7 +567,7 @@ export async function opportunityToCustomer(opportunityId: string) {
   const lead = opp.lead;
   const customer = await prisma.crm_customer.create({
     data: {
-      name: opp.name,
+      name: lead?.customerName ?? opp.name,
       nickname: lead?.nickname ?? null,
       city: lead?.city ?? null,
       customerTier: lead?.customerTier ?? null,
@@ -370,4 +579,112 @@ export async function opportunityToCustomer(opportunityId: string) {
   });
 
   return customer;
+}
+
+// ============ 线索销售人员变更通知 ============
+
+/** 记录线索销售人员变更（用于后续发送邮件通知） */
+export async function recordLeadAssignmentChange(data: {
+  leadId: string;
+  oldSalesPersonId: string | null;
+  newSalesPersonId: string | null;
+  createdBy: string;
+}) {
+  const { leadId, oldSalesPersonId, newSalesPersonId, createdBy } = data;
+
+  // 确定变更类型
+  let changeType: string;
+  if (!oldSalesPersonId && newSalesPersonId) {
+    changeType = "assigned"; // 从无到有
+  } else if (oldSalesPersonId && !newSalesPersonId) {
+    changeType = "unassigned"; // 从有到无
+  } else if (oldSalesPersonId && newSalesPersonId) {
+    changeType = "reassigned"; // 从A到B
+  } else {
+    return null; // 无变更，不记录
+  }
+
+  return prisma.crm_lead_assignment_notification.create({
+    data: {
+      leadId,
+      changeType,
+      oldSalesPersonId,
+      newSalesPersonId,
+      createdBy,
+    },
+  });
+}
+
+/** 批量记录线索销售人员变更 */
+export async function recordLeadAssignmentChanges(
+  leadChanges: Array<{
+    leadId: string;
+    oldSalesPersonId: string | null;
+    newSalesPersonId: string | null;
+  }>,
+  createdBy: string
+) {
+  const records = leadChanges
+    .map((change) => {
+      let changeType: string;
+      if (!change.oldSalesPersonId && change.newSalesPersonId) {
+        changeType = "assigned";
+      } else if (change.oldSalesPersonId && !change.newSalesPersonId) {
+        changeType = "unassigned";
+      } else if (change.oldSalesPersonId && change.newSalesPersonId) {
+        changeType = "reassigned";
+      } else {
+        return null; // 无变更
+      }
+      return {
+        leadId: change.leadId,
+        changeType,
+        oldSalesPersonId: change.oldSalesPersonId,
+        newSalesPersonId: change.newSalesPersonId,
+        createdBy,
+      };
+    })
+    .filter((r) => r !== null);
+
+  if (records.length === 0) return;
+
+  await prisma.crm_lead_assignment_notification.createMany({
+    data: records,
+  });
+}
+
+/** 获取待通知的变更记录（按销售人员分组） */
+export async function getPendingNotifications(auth: CrmAuth) {
+  if (!auth) return [];
+
+  // 查询未通知的记录
+  const where =
+    auth.role === "admin"
+      ? { notified: false }
+      : {
+          notified: false,
+          OR: [
+            { oldSalesPersonId: auth.userId },
+            { newSalesPersonId: auth.userId },
+          ],
+        };
+
+  return prisma.crm_lead_assignment_notification.findMany({
+    where,
+    orderBy: { createdAt: "desc" },
+    include: {
+      lead: { select: { id: true, customerName: true } },
+      oldSalesPerson: { select: { id: true, name: true, email: true } },
+      newSalesPerson: { select: { id: true, name: true, email: true } },
+    },
+  });
+}
+
+/** 标记通知为已发送 */
+export async function markNotificationsAsSent(notificationIds: string[]) {
+  if (notificationIds.length === 0) return;
+  await prisma.crm_lead_assignment_notification.updateMany({
+    where: { id: { in: notificationIds } },
+    data: { notified: true, notifiedAt: new Date() },
+  });
 }

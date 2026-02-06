@@ -3,7 +3,7 @@ import { prisma } from "@/app/lib/prisma";
 import Link from "next/link";
 import { lusitana } from "@/app/ui/fonts";
 
-type SearchParams = { customerId?: string; opportunityId?: string };
+type SearchParams = { leadId?: string; customerId?: string; opportunityId?: string };
 
 export default async function FollowUpsPage({
   searchParams,
@@ -12,8 +12,12 @@ export default async function FollowUpsPage({
 }) {
   const params = await searchParams;
   const filters =
-    params.customerId || params.opportunityId
-      ? { customerId: params.customerId, opportunityId: params.opportunityId }
+    params.leadId || params.customerId || params.opportunityId
+      ? {
+          leadId: params.leadId,
+          customerId: params.customerId,
+          opportunityId: params.opportunityId,
+        }
       : undefined;
 
   let followUps: Awaited<ReturnType<typeof getFollowUps>> = [];
@@ -24,9 +28,15 @@ export default async function FollowUpsPage({
     console.error("获取跟进记录失败:", e);
   }
 
-  // 获取筛选条件的可读名称（客户名、商机名及所属客户）
+  // 获取筛选条件的可读名称（线索名、客户名、商机名）
   let filterLabel: string | null = null;
-  if (params.customerId) {
+  if (params.leadId) {
+    const lead = await prisma.crm_lead.findUnique({
+      where: { id: params.leadId },
+      select: { customerName: true },
+    });
+    filterLabel = lead ? `线索：${lead.customerName}` : `线索ID: ${params.leadId}`;
+  } else if (params.customerId) {
     const c = await prisma.crm_customer.findUnique({
       where: { id: params.customerId },
       select: { name: true },
@@ -58,7 +68,7 @@ export default async function FollowUpsPage({
         </Link>
       </div>
 
-      {(params.customerId || params.opportunityId) && filterLabel && (
+      {(params.leadId || params.customerId || params.opportunityId) && filterLabel && (
         <p className="mb-4 text-sm text-muted-foreground">
           当前筛选：{filterLabel}
           <Link href="/dashboard/crm/follow-ups" className="ml-2 text-primary hover:underline">
@@ -73,8 +83,9 @@ export default async function FollowUpsPage({
             <tr>
               <th className="px-4 py-3 font-medium">跟进日期</th>
               <th className="px-4 py-3 font-medium">跟进人</th>
-              <th className="px-4 py-3 font-medium">关联客户</th>
+              <th className="px-4 py-3 font-medium">关联线索</th>
               <th className="px-4 py-3 font-medium">关联商机</th>
+              <th className="px-4 py-3 font-medium">关联客户</th>
               <th className="px-4 py-3 font-medium">沟通对象</th>
               <th className="px-4 py-3 font-medium">一句话进展</th>
               <th className="px-4 py-3 font-medium">跟进内容</th>
@@ -83,7 +94,7 @@ export default async function FollowUpsPage({
           <tbody>
             {followUps.length === 0 ? (
               <tr>
-                <td colSpan={7} className="px-4 py-8 text-center text-muted-foreground">
+                <td colSpan={8} className="px-4 py-8 text-center text-muted-foreground">
                   暂无数据，点击「新建跟进」添加
                 </td>
               </tr>
@@ -92,8 +103,9 @@ export default async function FollowUpsPage({
                 <tr key={f.id} className="border-b last:border-0 hover:bg-muted/30">
                   <td className="px-4 py-3">{f.followDate.toLocaleDateString("zh-CN")}</td>
                   <td className="px-4 py-3">{f.followUpBy?.name ?? "-"}</td>
-                  <td className="px-4 py-3">{f.customer?.name ?? "-"}</td>
+                  <td className="px-4 py-3">{f.lead?.customerName ?? "-"}</td>
                   <td className="px-4 py-3">{f.opportunity?.name ?? "-"}</td>
+                  <td className="px-4 py-3">{f.customer?.name ?? "-"}</td>
                   <td className="px-4 py-3">{f.contactPerson ?? "-"}</td>
                   <td className="px-4 py-3 max-w-[200px] truncate">{f.summary ?? "-"}</td>
                   <td className="px-4 py-3 max-w-[300px] truncate">{f.content}</td>
@@ -105,7 +117,7 @@ export default async function FollowUpsPage({
       </div>
 
       <p className="mt-4 text-sm text-muted-foreground">
-        跟进记录需关联客户或商机，可从客户/商机详情页进入筛选查看
+        本页汇总全部跟进记录（可关联线索、商机或客户）。管理员可见所有人记录，销售人员仅可见自己跟进或自己负责的线索/商机/客户的记录。展开线索表、商机表、客户表的行可查看单条记录的全过程时间线。
       </p>
     </main>
   );

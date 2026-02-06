@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { updateOpportunityStatusWithFollowUpAction } from "@/app/lib/crm-actions";
+import { updateCustomerStatusWithFollowUpAction } from "@/app/lib/crm-actions";
 import { StatusChangeDialog } from "../components/StatusChangeDialog";
 import {
   Select,
@@ -12,13 +12,13 @@ import {
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 
-const STATUS_OPTIONS = ["初步沟通", "方案确认", "待签约", "已赢单", "已丢单"];
+const STATUS_OPTIONS = ["预备签约", "已签约", "流失"];
 
-export function OpportunityStatusSelect({
-  opportunityId,
+export function CustomerStatusSelect({
+  customerId,
   currentStatus,
 }: {
-  opportunityId: string;
+  customerId: string;
   currentStatus: string;
 }) {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -34,8 +34,8 @@ export function OpportunityStatusSelect({
   const handleConfirm = async (content: string) => {
     setIsSubmitting(true);
     try {
-      const result = await updateOpportunityStatusWithFollowUpAction(
-        opportunityId,
+      const result = await updateCustomerStatusWithFollowUpAction(
+        customerId,
         selectedStatus,
         content
       );
@@ -55,15 +55,11 @@ export function OpportunityStatusSelect({
 
   const getStatusColor = (status: string) => {
     switch (status) {
-      case "初步沟通":
-        return "bg-gray-100 text-gray-800";
-      case "方案确认":
-        return "bg-blue-100 text-blue-800";
-      case "待签约":
+      case "预备签约":
         return "bg-yellow-100 text-yellow-800";
-      case "已赢单":
+      case "已签约":
         return "bg-green-100 text-green-800";
-      case "已丢单":
+      case "流失":
         return "bg-red-100 text-red-800";
       default:
         return "bg-gray-100 text-gray-800";
@@ -94,8 +90,8 @@ export function OpportunityStatusSelect({
         isOpen={isDialogOpen}
         onClose={() => setIsDialogOpen(false)}
         onConfirm={handleConfirm}
-        title="修改商机状态"
-        defaultContent={`商机状态由「${currentStatus}」变更为「${selectedStatus}」`}
+        title="修改客户状态"
+        defaultContent={`客户状态由「${currentStatus}」变更为「${selectedStatus}」`}
         isSubmitting={isSubmitting}
       />
     </>

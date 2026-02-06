@@ -27,40 +27,7 @@ async function main() {
     console.log(`用户表已有 ${userCount} 条数据，跳过用户数据创建。`);
   }
 
-  const customerNames = ["Acme Corp", "Globex", "Initech", "Umbrella", "Stark Industries", "Wayne Enterprises", "Wonka Factory", "Hooli", "Aperture", "Monsters Inc"];
-
-  await prisma.customer.createMany({
-    data: customerNames.map((name, index) => ({
-      name,
-      email: `customer${index + 1}@example.com`,
-      imageUrl: `/customers/customer-${index + 1}.png`,
-    })),
-  });
-
-  const customerIds = (await prisma.customer.findMany({ select: { id: true } })).map((customer) => customer.id);
-
-  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-  await prisma.revenue.createMany({
-    data: months.map((month) => ({
-      month,
-      revenue: randomInt(5000, 30000),
-    })),
-    skipDuplicates: true,
-  });
-
-  const invoiceStatuses = ["paid", "pending"];
   const today = new Date();
-  const sixMonthsAgo = addDays(today, -180);
-
-  await prisma.invoice.createMany({
-    data: Array.from({ length: 25 }, () => ({
-      customerId: pick(customerIds),
-      amount: randomInt(5000, 200000),
-      status: pick(invoiceStatuses),
-      date: randomDateBetween(sixMonthsAgo, today),
-    })),
-  });
-
   const supplierNames = ["Shenzhen Bright", "Ningbo United", "Qingdao Ocean", "Xiamen Harbor", "Suzhou Precision"];
 
   const suppliers = [];

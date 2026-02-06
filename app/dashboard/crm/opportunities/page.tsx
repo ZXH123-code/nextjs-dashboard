@@ -1,10 +1,9 @@
-import { getOpportunities, getCrmAuth } from "@/app/lib/crm";
-import { convertOpportunityToCustomerAction } from "@/app/lib/crm-actions";
-import { OpportunityStatusSelect } from "./OpportunityStatusSelect";
+import { getOpportunities, getCrmAuth, getUsers } from "@/app/lib/crm";
+import { OpportunitiesTable } from "./OpportunitiesTable";
 import Link from "next/link";
 import { lusitana } from "@/app/ui/fonts";
-import { Button } from "@/components/ui/button";
-import { ArrowLeft, FileText, User, UserPlus } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
+import { auth } from "@/auth";
 
 type SearchParams = { highlight?: string; leadId?: string };
 
@@ -16,9 +15,17 @@ export default async function OpportunitiesPage({
   const params = await searchParams;
 
   let opportunities: Awaited<ReturnType<typeof getOpportunities>> = [];
+  let users: Awaited<ReturnType<typeof getUsers>> = [];
+  let currentUserRole = "sales";
   try {
-    const auth = await getCrmAuth();
-    opportunities = await getOpportunities(auth);
+    const crmAuth = await getCrmAuth();
+    [opportunities, users] = await Promise.all([
+      getOpportunities(crmAuth),
+      getUsers(),
+    ]);
+    
+    const session = await auth();
+    currentUserRole = (session?.user as { role?: string })?.role ?? "sales";
   } catch (e) {
     console.error("获取商机失败:", e);
   }
@@ -42,16 +49,16 @@ export default async function OpportunitiesPage({
     }
   }
 
+  // 序列化为纯对象：Prisma Decimal 不能传入 Client Component，转为 number
+  const serializedOpps = filteredOpps.map((o) => ({
+    ...o,
+    amount: o.amount != null ? Number(o.amount) : null,
+  }));
+
   return (
     <main className="p-6 md:p-8">
       <div className="mb-4 flex items-center justify-between">
         <h1 className={`${lusitana.className} text-xl md:text-2xl`}>商机管理表</h1>
-        <Link
-          href="/dashboard/crm/opportunities/new"
-          className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
-        >
-          新建商机
-        </Link>
       </div>
 
       {filterLabel && (
@@ -67,85 +74,15 @@ export default async function OpportunitiesPage({
         </div>
       )}
 
-      <div className="rounded-lg border bg-card">
-        <table className="w-full text-left text-sm">
-          <thead className="border-b bg-muted/50">
-            <tr>
-              <th className="px-4 py-3 font-medium">商机名称</th>
-              <th className="px-4 py-3 font-medium">产品类型</th>
-              <th className="px-4 py-3 font-medium">商机金额</th>
-              <th className="px-4 py-3 font-medium">创建日期</th>
-              <th className="px-4 py-3 font-medium">预计赢单日期</th>
-              <th className="px-4 py-3 font-medium">销售人员</th>
-              <th className="px-4 py-3 font-medium">状态</th>
-              <th className="px-4 py-3 font-medium">来源线索</th>
-              <th className="px-4 py-3 font-medium">操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filteredOpps.length === 0 ? (
-              <tr>
-                <td colSpan={9} className="px-4 py-8 text-center text-muted-foreground">
-                  暂无数据，点击「新建商机」添加，或从线索转入
-                </td>
-              </tr>
-            ) : (
-              filteredOpps.map((opp) => (
-                <tr key={opp.id} className="border-b last:border-0 hover:bg-muted/30">
-                  <td className="px-4 py-3">{opp.name}</td>
-                  <td className="px-4 py-3">{opp.productType ?? "-"}</td>
-                  <td className="px-4 py-3">
-                    {opp.amount != null ? `¥${Number(opp.amount).toLocaleString()}` : "-"}
-                  </td>
-                  <td className="px-4 py-3">{opp.createdAt.toLocaleDateString("zh-CN")}</td>
-                  <td className="px-4 py-3">
-                    {opp.expectedCloseDate
-                      ? opp.expectedCloseDate.toLocaleDateString("zh-CN")
-                      : "-"}
-                  </td>
-                  <td className="px-4 py-3">{opp.salesPerson?.name ?? "-"}</td>
-                  <td className="px-4 py-3">
-                    <OpportunityStatusSelect opportunityId={opp.id} currentStatus={opp.status} />
-                  </td>
-                  <td className="px-4 py-3">{opp.lead?.customerName ?? "-"}</td>
-                  <td className="px-4 py-3">
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      {!opp.customer && ["待签约", "已赢单"].includes(opp.status) && (
-                        <form action={convertOpportunityToCustomerAction.bind(null, opp.id)} className="inline">
-                          <Button type="submit" variant="default" size="sm" className="h-7 gap-1">
-                            <UserPlus className="h-3.5 w-3.5" />
-                            转入客户
-                          </Button>
-                        </form>
-                      )}
-                      {opp.customer && (
-                        <Button variant="outline" size="sm" asChild className="h-7 gap-1">
-                          <Link href="/dashboard/crm/customers" className="inline-flex items-center gap-1.5">
-                            <User className="h-3.5 w-3.5" />
-                            查看客户
-                          </Link>
-                        </Button>
-                      )}
-                      <Button variant="ghost" size="sm" asChild className="h-7 gap-1">
-                        <Link
-                          href={`/dashboard/crm/follow-ups?opportunityId=${opp.id}`}
-                          className="inline-flex items-center gap-1.5"
-                        >
-                          <FileText className="h-3.5 w-3.5" />
-                          跟进记录
-                        </Link>
-                      </Button>
-                    </div>
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
+      <OpportunitiesTable 
+        opportunities={serializedOpps} 
+        currentUserRole={currentUserRole}
+        users={users}
+        highlightId={params.highlight}
+      />
 
       <p className="mt-4 text-sm text-muted-foreground">
-        状态说明：初步沟通 → 方案确认 → 待签约/已赢单（可转入客户）| 已丢单
+        状态说明：将线索状态改为「有意向」后，商机会自动生成并出现在此处。初步沟通 → 方案确认 → 待签约/已赢单（可转入客户）| 已丢单
       </p>
     </main>
   );

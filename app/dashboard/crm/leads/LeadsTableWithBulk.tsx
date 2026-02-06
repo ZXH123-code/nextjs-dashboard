@@ -1,13 +1,26 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, Fragment } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { LeadStatusSelect } from "./LeadStatusSelect";
 import { LeadSalesPersonSelect } from "./LeadSalesPersonSelect";
 import { DeleteLeadButton } from "./DeleteLeadButton";
-import { LeadsBulkAssignBar } from "./LeadsBulkAssignBar";
 import { Button } from "@/components/ui/button";
-import { Plus, ExternalLink, Pencil } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import {
+  Pencil,
+  MessageSquarePlus,
+  ChevronDown,
+  ChevronUp,
+  UserRound,
+  Briefcase,
+  Building2,
+  Check,
+} from "lucide-react";
+import { FollowUpTimeline } from "../components/FollowUpTimeline";
+import { WriteFollowUpDialog } from "../components/WriteFollowUpDialog";
+import { createManualFollowUpAction, updateLeadAction } from "@/app/lib/crm-actions";
 
 type Lead = {
   id: string;
@@ -20,7 +33,11 @@ type Lead = {
   status: string;
   salesPersonId: string | null;
   salesPerson: { id: string; name: string } | null;
-  opportunity: { id: string; name: string } | null;
+  opportunity: {
+    id: string;
+    name: string;
+    customer?: { id: string } | null;
+  } | null;
 };
 
 type User = { id: string; name: string };
@@ -29,55 +46,231 @@ export function LeadsTableWithBulk({
   leads,
   users,
   isAdmin,
+  currentUserRole,
+  highlightId,
 }: {
   leads: Lead[];
   users: User[];
   isAdmin: boolean;
+  currentUserRole?: string;
+  highlightId?: string;
 }) {
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const router = useRouter();
+  const [expandedLeadIds, setExpandedLeadIds] = useState<Set<string>>(new Set());
+  const [writeFollowUpLeadId, setWriteFollowUpLeadId] = useState<string | null>(null);
+  const [followUpRefreshKeys, setFollowUpRefreshKeys] = useState<Record<string, number>>({});
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [editing, setEditing] = useState<{ leadId: string; field: string; value: string } | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [rows, setRows] = useState(leads);
 
-  function toggleSelect(id: string) {
-    setSelectedIds((prev) => {
+  useEffect(() => {
+    if (highlightId) {
+      setExpandedLeadIds((prev) => new Set(prev).add(highlightId));
+      setTimeout(() => {
+        const row = document.getElementById(`lead-row-${highlightId}`);
+        if (row) row.scrollIntoView({ behavior: "smooth", block: "center" });
+      }, 100);
+    }
+  }, [highlightId]);
+
+  const toggleExpandedLead = (id: string) => {
+    setExpandedLeadIds((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
       return next;
     });
-  }
+  };
 
-  function toggleSelectAll() {
-    if (selectedIds.size === leads.length) {
-      setSelectedIds(new Set());
-    } else {
-      setSelectedIds(new Set(leads.map((l) => l.id)));
+  useEffect(() => {
+    setRows(leads);
+  }, [leads]);
+
+  const handleWriteFollowUp = async (data: {
+    content: string;
+    contactPerson?: string;
+    summary?: string;
+    nextStep?: string;
+    customerNeeds?: string;
+  }) => {
+    if (!writeFollowUpLeadId) return;
+
+    setIsSubmitting(true);
+    try {
+      const result = await createManualFollowUpAction({
+        leadId: writeFollowUpLeadId,
+        ...data,
+      });
+      if (result?.error) {
+        alert(result.error);
+      } else {
+        const leadIdJustSubmitted = writeFollowUpLeadId;
+        setWriteFollowUpLeadId(null);
+        setFollowUpRefreshKeys((prev) => ({
+          ...prev,
+          [leadIdJustSubmitted]: (prev[leadIdJustSubmitted] ?? 0) + 1,
+        }));
+        router.refresh();
+      }
+    } catch (error) {
+      console.error("添加跟进记录失败:", error);
+      alert("添加跟进记录失败");
+    } finally {
+      setIsSubmitting(false);
     }
-  }
+  };
 
-  const selectedArray = Array.from(selectedIds);
+  const currentWriteFollowUpLead = rows.find((l) => l.id === writeFollowUpLeadId);
+
+  const startEdit = (leadId: string, field: string, currentValue: string | null) => {
+    setEditing({ leadId, field, value: currentValue ?? "" });
+  };
+
+  const cancelEdit = () => setEditing(null);
+
+  const getLeadFieldValue = (lead: Lead, field: string): string => {
+    switch (field) {
+      case "customerName": return lead.customerName;
+      case "nickname": return lead.nickname ?? "";
+      case "city": return lead.city ?? "";
+      case "industry": return lead.industry ?? "";
+      case "leadSource": return lead.leadSource ?? "";
+      default: return "";
+    }
+  };
+
+  const saveLeadEdit = async () => {
+    if (saving) return;
+    if (!editing) return;
+    const lead = rows.find((l) => l.id === editing.leadId);
+    if (!lead) return;
+    const current = getLeadFieldValue(lead, editing.field);
+    if (editing.value === current) {
+      setEditing(null);
+      return;
+    }
+    setSaving(true);
+    const prevRow = lead;
+    const nextValue =
+      editing.field === "customerName" && !editing.value.trim()
+        ? "（待补全）"
+        : editing.value;
+    setRows((prev) =>
+      prev.map((l) => (l.id === editing.leadId ? { ...l, [editing.field]: nextValue } : l))
+    );
+    setEditing(null);
+    try {
+      const formData = new FormData();
+      formData.append("leadId", editing.leadId);
+      formData.append("customerName", lead.customerName);
+      formData.append("nickname", lead.nickname ?? "");
+      formData.append("city", lead.city ?? "");
+      formData.append("industry", lead.industry ?? "");
+      formData.append("leadSource", lead.leadSource ?? "");
+      formData.append("salesPersonId", lead.salesPersonId ?? "");
+      formData.append("status", lead.status);
+      formData.append("inline", "1");
+      formData.set(editing.field, editing.value);
+      const result = await updateLeadAction(null, formData);
+      if (result?.error) {
+        alert(result.error);
+        setRows((prev) =>
+          prev.map((l) => (l.id === prevRow.id ? prevRow : l))
+        );
+      } else {
+        router.refresh();
+      }
+    } catch (e) {
+      console.error(e);
+      alert("保存失败");
+      setRows((prev) =>
+        prev.map((l) => (l.id === prevRow.id ? prevRow : l))
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const renderLeadCell = (lead: Lead, field: string, displayValue: string) => {
+    if (!isAdmin) return <>{displayValue || "-"}</>;
+    const isEditing = editing?.leadId === lead.id && editing?.field === field;
+    if (isEditing) {
+      return (
+        <Input
+          autoFocus
+          value={editing.value}
+          onChange={(e) => setEditing({ ...editing, value: e.target.value })}
+          onBlur={saveLeadEdit}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") saveLeadEdit();
+            if (e.key === "Escape") cancelEdit();
+          }}
+          className="h-8 border-primary"
+          disabled={saving}
+        />
+      );
+    }
+    return (
+      <div
+        onClick={() => startEdit(lead.id, field, getLeadFieldValue(lead, field))}
+        className="cursor-pointer rounded px-2 py-1 hover:bg-blue-50"
+        title="点击编辑"
+      >
+        {displayValue || <span className="text-muted-foreground">-</span>}
+      </div>
+    );
+  };
+
+  /** 流转阶段：1=线索 2=商机 3=客户 */
+  const getFlowStage = (lead: Lead): 1 | 2 | 3 => {
+    if (!lead.opportunity) return 1;
+    if (lead.opportunity.customer) return 3;
+    return 2;
+  };
+
+  const LeadFlowBar = ({ lead }: { lead: Lead }) => {
+    const stage = getFlowStage(lead);
+    const steps: { key: 1 | 2 | 3; label: string; Icon: typeof UserRound }[] = [
+      { key: 1, label: "线索", Icon: UserRound },
+      { key: 2, label: "商机", Icon: Briefcase },
+      { key: 3, label: "客户", Icon: Building2 },
+    ];
+    return (
+      <div className="flex items-center justify-center gap-1">
+        {steps.map(({ key, label, Icon }, i) => {
+          const isDone = stage > key;
+          const isCurrent = stage === key;
+          const isPending = stage < key;
+          return (
+            <span key={key} className="flex items-center gap-1">
+              <span
+                className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs whitespace-nowrap
+                  ${isDone ? "text-green-600 bg-green-50" : ""}
+                  ${isCurrent ? "text-primary font-semibold bg-primary/10 ring-1 ring-primary/30" : ""}
+                  ${isPending ? "text-muted-foreground/60" : ""}`}
+                title={isCurrent ? `当前在「${label}」` : isDone ? `已完成「${label}」` : `未到「${label}」`}
+              >
+                {isDone ? <Check className="h-3 w-3 shrink-0" /> : <Icon className="h-3 w-3 shrink-0" />}
+                <span>{label}</span>
+              </span>
+              {i < steps.length - 1 && (
+                <span className="text-muted-foreground/40 text-[10px]">→</span>
+              )}
+            </span>
+          );
+        })}
+      </div>
+    );
+  };
 
   return (
     <div className="space-y-3">
-      {isAdmin && selectedArray.length > 0 && (
-        <LeadsBulkAssignBar
-          selectedIds={selectedArray}
-          onClear={() => setSelectedIds(new Set())}
-          users={users}
-        />
-      )}
       <div className="rounded-lg border bg-card">
         <table className="w-full text-left text-sm">
           <thead className="border-b bg-muted/50">
             <tr>
-              {isAdmin && (
-                <th className="w-10 px-2 py-3">
-                  <input
-                    type="checkbox"
-                    checked={selectedIds.size === leads.length && leads.length > 0}
-                    onChange={toggleSelectAll}
-                    className="h-4 w-4 rounded border-input"
-                  />
-                </th>
-              )}
+              <th className="w-10 px-4 py-3 font-medium"></th>
               <th className="px-4 py-3 font-medium">客户名称</th>
               <th className="px-4 py-3 font-medium">昵称</th>
               <th className="px-4 py-3 font-medium">城市</th>
@@ -86,112 +279,138 @@ export function LeadsTableWithBulk({
               <th className="px-4 py-3 font-medium">创建日期</th>
               <th className="px-4 py-3 font-medium">销售人员</th>
               <th className="px-4 py-3 font-medium">状态</th>
+              <th className="px-4 py-3 font-medium text-center" title="线索→商机→客户，高亮为当前阶段">
+                流转阶段
+              </th>
               <th className="px-4 py-3 font-medium">操作</th>
             </tr>
           </thead>
           <tbody>
-            {leads.length === 0 ? (
+            {rows.length === 0 ? (
               <tr>
                 <td
-                  colSpan={isAdmin ? 10 : 9}
+                  colSpan={11}
                   className="px-4 py-8 text-center text-muted-foreground"
                 >
-                  暂无数据，点击「新建线索」添加
+                  暂无数据，仅管理员可点击「新建线索」添加一条空记录后在表格内编辑
                 </td>
               </tr>
             ) : (
-              leads.map((lead) => (
-                <tr
-                  key={lead.id}
-                  className="border-b last:border-0 hover:bg-muted/30"
-                >
-                  {isAdmin && (
-                    <td className="px-2 py-3">
-                      <input
-                        type="checkbox"
-                        checked={selectedIds.has(lead.id)}
-                        onChange={() => toggleSelect(lead.id)}
-                        className="h-4 w-4 rounded border-input"
+              rows.map((lead) => (
+                <Fragment key={lead.id}>
+                  <tr
+                    id={`lead-row-${lead.id}`}
+                    className={`border-b last:border-0 hover:bg-muted/30 ${highlightId === lead.id ? "bg-yellow-50" : ""}`}
+                  >
+                    <td className="px-4 py-3">
+                      <button
+                        onClick={() => toggleExpandedLead(lead.id)}
+                        className="text-gray-500 hover:text-gray-700"
+                      >
+                        {expandedLeadIds.has(lead.id) ? (
+                          <ChevronUp className="h-4 w-4" />
+                        ) : (
+                          <ChevronDown className="h-4 w-4" />
+                        )}
+                      </button>
+                    </td>
+                    <td className="px-4 py-3">{renderLeadCell(lead, "customerName", lead.customerName)}</td>
+                    <td className="px-4 py-3">{renderLeadCell(lead, "nickname", lead.nickname ?? "-")}</td>
+                    <td className="px-4 py-3">{renderLeadCell(lead, "city", lead.city ?? "-")}</td>
+                    <td className="px-4 py-3">{renderLeadCell(lead, "industry", lead.industry ?? "-")}</td>
+                    <td className="px-4 py-3">{renderLeadCell(lead, "leadSource", lead.leadSource ?? "-")}</td>
+                    <td className="px-4 py-3">
+                      {lead.createdAt.toLocaleDateString("zh-CN")}
+                    </td>
+                    <td className="px-4 py-3">
+                      <LeadSalesPersonSelect
+                        leadId={lead.id}
+                        currentSalesPersonId={lead.salesPersonId}
+                        users={users}
+                        canAssign={isAdmin}
                       />
                     </td>
-                  )}
-                  <td className="px-4 py-3">{lead.customerName}</td>
-                  <td className="px-4 py-3">{lead.nickname ?? "-"}</td>
-                  <td className="px-4 py-3">{lead.city ?? "-"}</td>
-                  <td className="px-4 py-3">{lead.industry ?? "-"}</td>
-                  <td className="px-4 py-3">{lead.leadSource ?? "-"}</td>
-                  <td className="px-4 py-3">
-                    {lead.createdAt.toLocaleDateString("zh-CN")}
-                  </td>
-                  <td className="px-4 py-3">
-                    <LeadSalesPersonSelect
-                      leadId={lead.id}
-                      currentSalesPersonId={lead.salesPersonId}
-                      users={users}
-                    />
-                  </td>
-                  <td className="px-4 py-3">
-                    <LeadStatusSelect
-                      leadId={lead.id}
-                      currentStatus={lead.status}
-                    />
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      {lead.status === "有意向" && !lead.opportunity && (
-                        <Button asChild size="sm" variant="default" className="h-7 gap-1">
-                          <Link
-                            href={`/dashboard/crm/opportunities/new?leadId=${lead.id}`}
-                            className="inline-flex items-center gap-1.5"
-                          >
-                            <Plus className="h-3.5 w-3.5" />
-                            新建商机
-                          </Link>
+                    <td className="px-4 py-3">
+                      <LeadStatusSelect
+                        leadId={lead.id}
+                        currentStatus={lead.status}
+                      />
+                    </td>
+                    <td className="px-4 py-3">
+                      <LeadFlowBar lead={lead} />
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-7 gap-1"
+                          onClick={() => setWriteFollowUpLeadId(lead.id)}
+                        >
+                          <MessageSquarePlus className="h-3.5 w-3.5" />
+                          写跟进
                         </Button>
-                      )}
-                      {lead.opportunity && (
-                        <Button asChild size="sm" variant="outline" className="h-7 gap-1">
-                          <Link
-                            href={`/dashboard/crm/opportunities?highlight=${lead.opportunity.id}`}
-                            className="inline-flex items-center gap-1.5"
-                          >
-                            <ExternalLink className="h-3.5 w-3.5" />
-                            查看商机
-                          </Link>
-                        </Button>
-                      )}
-                      {isAdmin && (
-                        <>
-                          <Button asChild size="sm" variant="ghost" className="h-7 gap-1">
+                        {lead.opportunity && (
+                          <Button asChild size="sm" variant="default" className="h-7 gap-1">
                             <Link
-                              href={`/dashboard/crm/leads/${lead.id}/edit`}
+                              href={`/dashboard/crm/opportunities?highlight=${lead.opportunity.id}`}
                               className="inline-flex items-center gap-1.5"
                             >
                               <Pencil className="h-3.5 w-3.5" />
-                              编辑
+                              编辑/补全商机
                             </Link>
                           </Button>
-                          {!lead.opportunity && (
-                            <DeleteLeadButton
-                              leadId={lead.id}
-                              leadName={lead.customerName}
-                            />
-                          )}
-                        </>
-                      )}
-                      {lead.status !== "有意向" &&
-                        !lead.opportunity &&
-                        !isAdmin && (
-                          <span className="text-xs text-muted-foreground">—</span>
                         )}
-                    </div>
-                  </td>
-                </tr>
+                        {isAdmin && (
+                          <DeleteLeadButton
+                            leadId={lead.id}
+                            leadName={lead.customerName}
+                            hasOpportunity={!!lead.opportunity}
+                          />
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                  {expandedLeadIds.has(lead.id) && (
+                    <tr>
+                      <td colSpan={11} className="bg-gray-50 px-4 py-4">
+                        <div className="rounded-lg border border-gray-200 bg-white p-4">
+                          <h4 className="mb-3 font-semibold text-gray-900">
+                            跟进时间线
+                          </h4>
+                          <FollowUpTimeline
+                            leadId={lead.id}
+                            currentUserRole={currentUserRole}
+                            refreshKey={followUpRefreshKeys[lead.id] ?? 0}
+                          />
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
               ))
             )}
           </tbody>
         </table>
       </div>
+
+      {highlightId && (
+        <div className="mt-4 rounded-lg border border-yellow-300 bg-yellow-50 px-4 py-3 text-sm text-yellow-800">
+          当前高亮：从商机表「查看线索」跳转
+        </div>
+      )}
+
+      {/* 写跟进对话框 */}
+      {currentWriteFollowUpLead && (
+        <WriteFollowUpDialog
+          isOpen={!!writeFollowUpLeadId}
+          onClose={() => setWriteFollowUpLeadId(null)}
+          onConfirm={handleWriteFollowUp}
+          recordType="线索"
+          recordName={currentWriteFollowUpLead.customerName}
+          isSubmitting={isSubmitting}
+        />
+      )}
     </div>
   );
 }

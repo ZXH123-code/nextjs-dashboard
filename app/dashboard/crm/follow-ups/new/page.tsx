@@ -1,14 +1,19 @@
-import { getCustomers, getOpportunities, getCrmAuth } from "@/app/lib/crm";
+import { getLeads, getCustomers, getOpportunities, getCrmAuth } from "@/app/lib/crm";
 import { FollowUpForm } from "../FollowUpForm";
 import Link from "next/link";
 import { lusitana } from "@/app/ui/fonts";
 
 export default async function NewFollowUpPage() {
+  let leads: Awaited<ReturnType<typeof getLeads>> = [];
   let customers: Awaited<ReturnType<typeof getCustomers>> = [];
   let opportunities: Awaited<ReturnType<typeof getOpportunities>> = [];
   try {
     const auth = await getCrmAuth();
-    [customers, opportunities] = await Promise.all([getCustomers(auth), getOpportunities(auth)]);
+    [leads, customers, opportunities] = await Promise.all([
+      getLeads(auth),
+      getCustomers(auth),
+      getOpportunities(auth),
+    ]);
   } catch {
     // ignore
   }
@@ -23,6 +28,10 @@ export default async function NewFollowUpPage() {
       </div>
 
       <FollowUpForm
+        leads={leads.map((l) => ({
+          id: l.id,
+          customerName: l.customerName,
+        }))}
         customers={customers.map((c) => ({
           id: c.id,
           name: c.name,
@@ -36,7 +45,7 @@ export default async function NewFollowUpPage() {
       />
 
       <p className="mt-4 text-sm text-muted-foreground">
-        建议至少关联客户或商机其一，便于按客户/商机筛选跟进记录
+        建议至少关联线索、客户或商机其一，便于按类型筛选跟进记录
       </p>
     </main>
   );
