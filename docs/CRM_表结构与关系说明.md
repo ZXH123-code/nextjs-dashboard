@@ -48,9 +48,12 @@
 | lead_source     | string?  | 线索来源                    |
 | created_at      | datetime | 创建日期（自动）            |
 | customer_tier   | string?  | 客户分层                    |
+| contact_phone   | string?  | 联系方式（手机号）          |
 | sales_person_id | UUID?    | 销售人员 → users.id         |
 | status          | string   | 未跟进/跟进中/有意向/无意向 |
-| is_claimed      | boolean  | 是否领取                    |
+| deleted_at      | datetime?| 软删除时间，null=未删除     |
+
+> `is_claimed` 已从 Prisma 模型中移除；若数据库中仍保留该列，界面与业务逻辑均不使用（与「销售人员」语义重复）。
 
 **关联：**
 
@@ -67,6 +70,7 @@
 | product_type        | string?  | 产品类型                               |
 | status              | string   | 初步沟通/方案确认/待签约/已赢单/已丢单 |
 | amount              | decimal? | 商机金额                               |
+| contact_phone       | string?  | 联系方式（从线索继承，可同步）         |
 | created_at          | datetime | 创建日期（自动）                       |
 | expected_close_date | date?    | 预计赢单日期                           |
 | sales_person_id     | UUID?    | 销售人员 → users.id                    |
@@ -95,8 +99,11 @@
 | employee_count         | string? | 人员规模                        |
 | tags                   | string? | 企业标签                        |
 | main_products          | string? | 主营产品                        |
+| contact_phone          | string? | 联系方式（从商机/线索继承）     |
 | opportunity_id         | UUID?   | 来源商机 → crm_opportunities.id |
+| actual_amount          | decimal?| 实际成交金额                    |
 | sales_person_id        | UUID?   | 销售人员 → users.id             |
+| created_at             | datetime| 创建日期（自动）                |
 
 **关联：**
 
@@ -117,14 +124,24 @@
 | next_step       | string? | 下一步                          |
 | customer_needs  | string? | 客户需求                        |
 | status          | string? | 状态                            |
-| customer_id     | UUID?   | 关联客户 → crm_customers.id     |
-| opportunity_id  | UUID?   | 关联商机 → crm_opportunities.id |
+| lead_id            | UUID?   | 关联线索 → crm_leads.id         |
+| customer_id        | UUID?   | 关联客户 → crm_customers.id     |
+| opportunity_id     | UUID?   | 关联商机 → crm_opportunities.id |
+| created_at         | datetime| 创建时间（自动）                |
+| updated_at         | datetime?| 更新时间                       |
+| updated_by_id      | UUID?   | 更新人 → users.id               |
+| is_system_generated| boolean | 是否系统自动生成（如状态变更）  |
 
 **关联：**
 
 - `follow_up_by_id` → users（多对一）
+- `lead_id` → crm_leads（多对一，可选）
 - `customer_id` → crm_customers（多对一，可选）
 - `opportunity_id` → crm_opportunities（多对一，可选）
+
+### 5. crm_lead_assignment_notifications（线索分配通知，内部用）
+
+记录线索销售人员变更，用于邮件通知与已读状态，由系统在批量分配/单人变更时写入，无需在业务文档中展开。
 
 ## 三、关联方式总结
 
@@ -139,10 +156,16 @@
 | crm_customers     | opportunity_id     | crm_opportunities | 多对一 | 来源商机                            |
 | crm_customers     | sales_person_id    | users             | 多对一 | 销售人员                            |
 | crm_follow_ups    | follow_up_by_id    | users             | 多对一 | 跟进人                              |
+| crm_follow_ups    | lead_id            | crm_leads         | 多对一 | 关联线索                            |
 | crm_follow_ups    | customer_id        | crm_customers     | 多对一 | 关联客户                            |
 | crm_follow_ups    | opportunity_id     | crm_opportunities | 多对一 | 关联商机                            |
 
-## 四、状态流转规则
+## 四、列表默认排序与高亮
+
+- **线索 / 商机 / 客户** 列表均按 **创建时间倒序**（`created_at desc`），越新的记录越靠上。
+- 带 `?highlight=<id>` 进入页面时，对应行会**蓝色柔光脉冲**闪烁约 3 次（约 2.4 秒）后恢复，并自动展开该行、滚动到视区中央；无额外说明文案。
+
+## 五、状态流转规则
 
 1. **线索 → 商机**
 
@@ -161,7 +184,7 @@
    - 跟进人从当前登录用户获取
    - **新建跟进表单联动**：选客户后商机仅显示该客户的来源商机（customer.opportunity_id）；选商机后若已转入客户则自动带出客户（opportunity → customer 反向关联）
 
-## 五、数据库迁移
+## 六、数据库迁移
 
 ```bash
 npx prisma migrate dev --name add_crm_tables

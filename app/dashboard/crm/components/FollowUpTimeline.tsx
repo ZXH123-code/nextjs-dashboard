@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Loader2 } from "lucide-react";
 import { useAlert } from "@/hooks/use-alert";
+import { FollowUpTimelineSkeleton } from "@/app/ui/skeletons";
 
 interface FollowUp {
   id: string;
@@ -40,7 +42,14 @@ export function FollowUpTimeline({
   const [followUps, setFollowUps] = useState<FollowUp[]>([]);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState(false);
+  const [ellipsis, setEllipsis] = useState(0); // 0→1→2 循环，用于「加载跟进记录. / .. / ...」
   const { showAlert, AlertComponent } = useAlert();
+
+  useEffect(() => {
+    if (!loading) return;
+    const t = setInterval(() => setEllipsis((e) => (e + 1) % 3), 400);
+    return () => clearInterval(t);
+  }, [loading]);
 
   useEffect(() => {
     setLoading(true);
@@ -79,10 +88,16 @@ export function FollowUpTimeline({
     return `${year}-${month}-${day} ${hours}:${minutes}`;
   };
 
+  // 使用 if(loading) 而非 Suspense：当前在 useEffect 里 fetch，是命令式、不“挂起”的；
+  // Suspense 需要渲染阶段就能拿到 promise（如 use() 或支持 suspend 的请求库），适合服务端/流式场景。
   if (loading) {
     return (
-      <div className="py-4 text-center text-sm text-gray-500">
-        加载中...
+      <div className="space-y-3">
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
+          <span>加载跟进记录{".".repeat(ellipsis + 1)}</span>
+        </div>
+        <FollowUpTimelineSkeleton />
       </div>
     );
   }
@@ -102,7 +117,7 @@ export function FollowUpTimeline({
   return (
     <>
       <AlertComponent />
-      <div className="space-y-3">
+      <div className="space-y-3 text-left">
       {displayFollowUps.map((followUp, index) => (
         <div
           key={followUp.id}

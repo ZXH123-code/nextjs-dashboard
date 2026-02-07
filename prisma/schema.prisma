@@ -16,15 +16,15 @@ model users {
   password String
   role     String? @default("sales") @db.VarChar(20) // admin=销售总管看全部, sales=销售人员只看自己的
 
-  crm_leads                          crm_lead[]
-  crm_opportunities                  crm_opportunity[]                   @relation("opportunity_sales")
-  crm_opportunities_delivery         crm_opportunity[]                   @relation("opportunity_delivery")
-  crm_customers                      crm_customer[]
-  crm_follow_ups                     crm_follow_up[]                     @relation("follow_up_creator")
-  crm_follow_ups_updated             crm_follow_up[]                     @relation("follow_up_updater")
-  crm_lead_notifications_as_old     crm_lead_assignment_notification[] @relation("notification_old_sales")
-  crm_lead_notifications_as_new     crm_lead_assignment_notification[] @relation("notification_new_sales")
-  crm_lead_notifications_created    crm_lead_assignment_notification[] @relation("notification_creator")
+  crm_leads                      crm_lead[]
+  crm_opportunities              crm_opportunity[]                  @relation("opportunity_sales")
+  crm_opportunities_delivery     crm_opportunity[]                  @relation("opportunity_delivery")
+  crm_customers                  crm_customer[]
+  crm_follow_ups                 crm_follow_up[]                    @relation("follow_up_creator")
+  crm_follow_ups_updated         crm_follow_up[]                    @relation("follow_up_updater")
+  crm_lead_notifications_as_old  crm_lead_assignment_notification[] @relation("notification_old_sales")
+  crm_lead_notifications_as_new  crm_lead_assignment_notification[] @relation("notification_new_sales")
+  crm_lead_notifications_created crm_lead_assignment_notification[] @relation("notification_creator")
 }
 
 // ============ CRM 四张表 ============
@@ -43,12 +43,12 @@ model crm_lead {
   customerTier  String?  @map("customer_tier") @db.VarChar(50)
   salesPersonId String?  @map("sales_person_id") @db.Uuid
   status        String   @default("未跟进") @db.VarChar(50) // 未跟进|跟进中|有意向|无意向
-  isClaimed     Boolean  @default(false) @map("is_claimed")
-  deletedAt     DateTime? @map("deleted_at") @db.Timestamp(6) // 软删除时间，null 表示未删除
 
-  salesPerson            users?                              @relation(fields: [salesPersonId], references: [id])
-  opportunity            crm_opportunity?
-  followUps              crm_follow_up[] // 该线索下的所有跟进记录
+  deletedAt DateTime? @map("deleted_at") @db.Timestamp(6) // 软删除时间，null 表示未删除
+
+  salesPerson             users?                             @relation(fields: [salesPersonId], references: [id])
+  opportunity             crm_opportunity?
+  followUps               crm_follow_up[] // 该线索下的所有跟进记录
   assignmentNotifications crm_lead_assignment_notification[] // 该线索的销售人员变更通知
 
   @@index([status])
@@ -100,6 +100,7 @@ model crm_customer {
   opportunityId        String?   @unique @map("opportunity_id") @db.Uuid
   actualAmount         Decimal?  @map("actual_amount") @db.Decimal(12, 2) // 实际成交金额（仅已签约客户需要）
   salesPersonId        String?   @map("sales_person_id") @db.Uuid
+  createdAt            DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
 
   opportunity crm_opportunity? @relation(fields: [opportunityId], references: [id])
   salesPerson users?           @relation(fields: [salesPersonId], references: [id])
@@ -108,6 +109,7 @@ model crm_customer {
   @@index([status])
   @@index([salesPersonId])
   @@index([opportunityId])
+  @@index([createdAt])
   @@map("crm_customers")
 }
 
@@ -148,9 +150,9 @@ model crm_follow_up {
 
 /// 线索销售人员变更通知：记录每次销售人员变更，用于发送邮件通知
 model crm_lead_assignment_notification {
-  id         String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
-  leadId     String   @map("lead_id") @db.Uuid
-  changeType String   @map("change_type") @db.VarChar(20) // "assigned" | "reassigned" | "unassigned"
+  id         String @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  leadId     String @map("lead_id") @db.Uuid
+  changeType String @map("change_type") @db.VarChar(20) // "assigned" | "reassigned" | "unassigned"
 
   // 变更前后的销售人员
   oldSalesPersonId String? @map("old_sales_person_id") @db.Uuid

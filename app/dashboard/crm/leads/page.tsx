@@ -35,11 +35,12 @@ export default async function LeadsPage({
         users={users} 
         isAdmin={isAdmin} 
         currentUserRole={auth?.role}
+        currentUserId={auth?.userId}
         highlightId={params.highlight}
       />
 
       <p className="mt-4 text-sm text-muted-foreground">
-        状态说明：未跟进 → 有意向（自动生成商机并可补全）| 无意向。仅管理员可新建线索、批量导入及表格内编辑。
+        状态说明：未跟进 → 有意向（自动生成商机并可补全）| 无意向。管理员可新建线索、批量导入及编辑全部；销售人员可表格内编辑自己负责的线索。
       </p>
     </main>
   );

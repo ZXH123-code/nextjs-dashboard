@@ -23,33 +23,19 @@ export default async function OpportunitiesPage({
       getOpportunities(crmAuth),
       getUsers(),
     ]);
-    
+
     const session = await auth();
     currentUserRole = (session?.user as { role?: string })?.role ?? "sales";
   } catch (e) {
     console.error("获取商机失败:", e);
   }
 
-  // 从线索进入（highlight=商机ID）：筛选并显示来源；从侧边栏进入：显示全部
-  let filterLabel: string | null = null;
+  // leadId：从线索详情等进入时只显示该线索下的商机；无则显示全部。highlight 仅用于表格内高亮+滚动，不筛列表
   let filteredOpps = opportunities;
-  if (params.highlight) {
-    const target = opportunities.find((o) => o.id === params.highlight);
-    if (target) {
-      const leadName = target.lead?.customerName ?? "未知线索";
-      filterLabel = `来源于线索「${leadName}」`;
-      filteredOpps = [target];
-    }
-  } else if (params.leadId) {
-    const fromLead = opportunities.filter((o) => o.leadId === params.leadId);
-    if (fromLead.length > 0) {
-      const leadName = fromLead[0]?.lead?.customerName ?? "未知线索";
-      filterLabel = `来源于线索「${leadName}」`;
-      filteredOpps = fromLead;
-    }
+  if (params.leadId && !params.highlight) {
+    filteredOpps = opportunities.filter((o) => o.leadId === params.leadId);
   }
 
-  // 序列化为纯对象：Prisma Decimal 不能传入 Client Component，转为 number
   const serializedOpps = filteredOpps.map((o) => ({
     ...o,
     amount: o.amount != null ? Number(o.amount) : null,
@@ -61,9 +47,9 @@ export default async function OpportunitiesPage({
         <h1 className={`${lusitana.className} text-xl md:text-2xl`}>商机管理表</h1>
       </div>
 
-      {filterLabel && (
+      {params.leadId && !params.highlight && filteredOpps.length > 0 && (
         <div className="mb-4 flex items-center gap-3 rounded-lg border bg-muted/50 px-4 py-3">
-          <span className="text-sm font-medium">当前筛选：{filterLabel}</span>
+          <span className="text-sm font-medium">当前筛选：该线索下的商机</span>
           <Link
             href="/dashboard/crm/opportunities"
             className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
@@ -74,8 +60,8 @@ export default async function OpportunitiesPage({
         </div>
       )}
 
-      <OpportunitiesTable 
-        opportunities={serializedOpps} 
+      <OpportunitiesTable
+        opportunities={serializedOpps}
         currentUserRole={currentUserRole}
         users={users}
         highlightId={params.highlight}

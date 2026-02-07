@@ -5,6 +5,7 @@ import { restoreLeadAction, deleteLeadAction, cleanupOldDeletedLeadsAction } fro
 import { Button } from "@/components/ui/button";
 import { Trash2, RotateCcw, AlertTriangle, Sparkles } from "lucide-react";
 import { useAlert } from "@/hooks/use-alert";
+import { useConfirm } from "@/hooks/use-confirm";
 
 type DeletedLead = {
   id: string;
@@ -20,10 +21,9 @@ export function RecycleBinSection({ deletedLeads }: { deletedLeads: DeletedLead[
   const [processing, setProcessing] = useState<string | null>(null);
   const [cleaning, setCleaning] = useState(false);
   const { showAlert, AlertComponent } = useAlert();
+  const { showConfirm, ConfirmComponent } = useConfirm();
 
-  const handleRestore = async (leadId: string, leadName: string) => {
-    if (!confirm(`确定要恢复线索「${leadName}」吗？`)) return;
-
+  const doRestore = async (leadId: string, leadName: string) => {
     setProcessing(leadId);
     try {
       const formData = new FormData();
@@ -43,13 +43,18 @@ export function RecycleBinSection({ deletedLeads }: { deletedLeads: DeletedLead[
     }
   };
 
-  const handlePermanentDelete = async (leadId: string, leadName: string, hasOpportunity: boolean) => {
-    const message = hasOpportunity
-      ? `确定要彻底删除线索「${leadName}」吗？\n\n该线索已转为商机，彻底删除后商机和客户也会被删除，且此操作不可恢复！`
-      : `确定要彻底删除线索「${leadName}」吗？\n\n此操作不可恢复！`;
+  const handleRestore = (leadId: string, leadName: string) => {
+    showConfirm(
+      {
+        title: "恢复线索",
+        description: `确定要恢复线索「${leadName}」吗？`,
+        confirmText: "确定恢复",
+      },
+      () => doRestore(leadId, leadName)
+    );
+  };
 
-    if (!confirm(message)) return;
-
+  const doPermanentDelete = async (leadId: string) => {
     setProcessing(leadId);
     try {
       const formData = new FormData();
@@ -65,9 +70,23 @@ export function RecycleBinSection({ deletedLeads }: { deletedLeads: DeletedLead[
     }
   };
 
-  const handleCleanup = async (days: number) => {
-    if (!confirm(`确定要清理超过 ${days} 天的已删除记录吗？\n\n此操作不可恢复！`)) return;
+  const handlePermanentDelete = (leadId: string, leadName: string, hasOpportunity: boolean) => {
+    const description = hasOpportunity
+      ? `确定要彻底删除线索「${leadName}」吗？\n\n该线索已转为商机，彻底删除后商机和客户也会被删除，且此操作不可恢复！`
+      : `确定要彻底删除线索「${leadName}」吗？\n\n此操作不可恢复！`;
 
+    showConfirm(
+      {
+        title: "彻底删除",
+        description,
+        confirmText: "彻底删除",
+        variant: "destructive",
+      },
+      () => doPermanentDelete(leadId)
+    );
+  };
+
+  const doCleanup = async (days: number) => {
     setCleaning(true);
     try {
       const result = await cleanupOldDeletedLeadsAction(days);
@@ -90,6 +109,18 @@ export function RecycleBinSection({ deletedLeads }: { deletedLeads: DeletedLead[
     }
   };
 
+  const handleCleanup = (days: number) => {
+    showConfirm(
+      {
+        title: "清理已删除记录",
+        description: `确定要清理超过 ${days} 天的已删除记录吗？\n\n此操作不可恢复！`,
+        confirmText: "确定清理",
+        variant: "destructive",
+      },
+      () => doCleanup(days)
+    );
+  };
+
   const getDaysAgo = (date: Date | null) => {
     if (!date) return "";
     const now = new Date();
@@ -102,6 +133,7 @@ export function RecycleBinSection({ deletedLeads }: { deletedLeads: DeletedLead[
   return (
     <>
       <AlertComponent />
+      <ConfirmComponent />
       <div className="mt-6">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-3">

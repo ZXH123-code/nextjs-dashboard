@@ -51,10 +51,10 @@ const emptyWhere = { id: "00000000-0000-0000-0000-000000000000" }; // 不可能�
  */
 function buildLeadWhere(auth: CrmAuth, includeDeleted = false) {
   const base = !auth ? emptyWhere : auth.role === "admin" ? {} : salesFilter(auth.userId);
-  
+
   // 软删除过滤：默认只查询未删除的记录
   const deletedFilter = includeDeleted ? {} : { deletedAt: null };
-  
+
   return { ...base, ...deletedFilter };
 }
 
@@ -80,7 +80,7 @@ export async function getLeads(auth: CrmAuth, includeDeleted = false) {
     include: {
       salesPerson: { select: { id: true, name: true } },
       opportunity: {
-        select: { id: true, name: true, customer: { select: { id: true } } },
+        select: { id: true, name: true, customer: { select: { id: true, status: true } } },
       },
     },
   });
@@ -91,9 +91,9 @@ export async function getLeads(auth: CrmAuth, includeDeleted = false) {
  */
 export async function getDeletedLeads(auth: CrmAuth) {
   if (!auth || auth.role !== "admin") return [];
-  
+
   return prisma.crm_lead.findMany({
-    where: { 
+    where: {
       deletedAt: { not: null }, // 只查询已删除的记录
     },
     orderBy: { deletedAt: "desc" }, // 按删除时间倒序
@@ -239,16 +239,16 @@ export async function deleteLead(id: string) {
 export async function deleteLeadWithCascade(leadId: string) {
   const lead = await prisma.crm_lead.findUnique({
     where: { id: leadId, deletedAt: null }, // 只查询未删除的记录
-    select: { 
+    select: {
       id: true,
-      opportunity: { 
-        select: { 
+      opportunity: {
+        select: {
           id: true,
-          customer: { 
-            select: { id: true } 
-          } 
-        } 
-      } 
+          customer: {
+            select: { id: true }
+          }
+        }
+      }
     },
   });
   if (!lead) return;
@@ -346,7 +346,7 @@ export async function createOpportunity(data: {
     });
     contactPhone = lead?.contactPhone ?? undefined;
   }
-  
+
   return prisma.crm_opportunity.create({
     data: {
       name: data.name,
@@ -404,14 +404,14 @@ export async function getCustomers(auth: CrmAuth) {
   const where = !auth ? emptyWhere : auth.role === "admin" ? {} : salesFilter(auth.userId);
   const rows = await prisma.crm_customer.findMany({
     where,
-    orderBy: { firstMaintenanceDate: "desc" },
+    orderBy: { createdAt: "desc" },
     include: {
-      opportunity: { 
-        select: { 
-          id: true, 
+      opportunity: {
+        select: {
+          id: true,
           name: true,
-          lead: { select: { contactPhone: true } }
-        } 
+          lead: { select: { id: true, contactPhone: true } }
+        }
       },
       salesPerson: { select: { id: true, name: true } },
     },
@@ -447,7 +447,7 @@ export async function createCustomer(data: {
     });
     contactPhone = opportunity?.contactPhone ?? opportunity?.lead?.contactPhone ?? undefined;
   }
-  
+
   return prisma.crm_customer.create({
     data: {
       name: data.name,
@@ -683,7 +683,7 @@ export async function deleteFollowUp(id: string) {
 
 /** 线索转商机：当状态变为「有意向」时调用 */
 export async function leadToOpportunity(leadId: string) {
-  const lead = await prisma.crm_lead.findUnique({ 
+  const lead = await prisma.crm_lead.findUnique({
     where: { id: leadId, deletedAt: null } // 已删除的线索不能转商机
   });
   if (!lead) throw new Error("线索不存在或已被删除");
@@ -721,7 +721,7 @@ export async function opportunityToCustomer(opportunityId: string) {
   const lead = opp.lead;
   // 继承联系方式：优先使用商机的 contactPhone，否则使用线索的 contactPhone
   const contactPhone = opp.contactPhone ?? lead?.contactPhone ?? null;
-  
+
   const customer = await prisma.crm_customer.create({
     data: {
       name: lead?.customerName ?? opp.name,
@@ -820,12 +820,12 @@ export async function getPendingNotifications(auth: CrmAuth) {
     auth.role === "admin"
       ? { notified: false }
       : {
-          notified: false,
-          OR: [
-            { oldSalesPersonId: auth.userId },
-            { newSalesPersonId: auth.userId },
-          ],
-        };
+        notified: false,
+        OR: [
+          { oldSalesPersonId: auth.userId },
+          { newSalesPersonId: auth.userId },
+        ],
+      };
 
   return prisma.crm_lead_assignment_notification.findMany({
     where,

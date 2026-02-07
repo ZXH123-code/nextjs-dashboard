@@ -33,14 +33,15 @@
     - `profile/`：个人资料页（查看当前角色等）
   - `api/`
     - `crm/leads/import/route.ts`：Excel 批量导入线索的 API
+    - `crm/follow-ups/timeline/route.ts`：跟进时间线数据（按 lead/opportunity/customer 查询）
   - `lib/`
-    - `crm.ts`：CRM 数据层（Prisma 查询与状态流转）
-    - `crm-actions.ts`：Server Actions（表单提交逻辑）
-    - `crm-constants.ts`：CRM 纯常量（可在客户端直接使用）
+    - `crm.ts`：CRM 数据层（getLeads / getOpportunities / getCustomers / getFollowUpTimeline、状态流转与创建客户等）
+    - `crm-actions.ts`：Server Actions（updateLead / updateOpportunity / updateCustomer、同步联系方式/客户名称、跟进与状态变更等）
+    - `crm-constants.ts`：CRM 纯常量（状态选项等，可在客户端直接使用）
     - `email.ts`：邮件发送工具（Resend）
     - 其他：Prisma、auth 等工具
 - `auth.ts`：NextAuth 配置与授权逻辑
-- `prisma/schema.prisma`：数据库 schema
+- `prisma/schema.prisma`：数据库 schema（四张 CRM 表 + users + 跟进、通知等）
 - `docs/`：项目所有业务/技术文档
 
 ---
@@ -185,7 +186,19 @@ Vercel 等平台会自动执行 `build` 和 `start`，只需确保：
 
 ---
 
-## 六、与 CRM 业务文档的关系
+## 六、数据与逻辑文档索引
+
+| 关注点       | 文档 / 代码 |
+| ------------ | ----------- |
+| 表结构、字段、外键、排序与高亮 | `CRM_表结构与关系说明.md` |
+| 四张表业务含义、表单用法、状态流转、同步规则 | `CRM_四张表与表单逻辑说明.md` |
+| 表格内编辑、跳转高亮（蓝色脉冲）、查看记录滑层 | `CRM_表格内编辑与跳转高亮.md` |
+| 权限与数据过滤（admin/sales） | `CRM_权限说明.md` |
+| 跟进记录全流程、时间线、状态变更自动跟进 | `CRM_跟进记录全流程功能总结.md` |
+| 对外 API（导入、后续扩展） | `CRM_API_接口说明.md` |
+| 数据层与 Server Actions 入口 | `app/lib/crm.ts`、`app/lib/crm-actions.ts` |
+
+## 七、与 CRM 业务文档的关系
 
 - 若你是 **业务负责人 / 销售负责人**，优先阅读：
   - `CRM_四张表与表单逻辑说明.md`
@@ -199,5 +212,5 @@ Vercel 等平台会自动执行 `build` 和 `start`，只需确保：
   5. `DATABASE_URL_客户端组件导入问题排查.md`
   6. `EMAIL_邮件通知与配置说明.md`
 
-通过以上几篇文档，可以快速理解「项目能做什么」以及「代码大致怎么组织的」，方便继续扩展新模块或接其他系统。
+通过以上几篇文档，可以快速理解「项目能做什么」以及「代码与数据大致怎么组织的」，方便继续扩展新模块或接其他系统。
 

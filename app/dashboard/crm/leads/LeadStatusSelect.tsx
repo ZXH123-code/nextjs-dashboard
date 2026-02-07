@@ -80,7 +80,7 @@ export function LeadStatusSelect({
       >
         <SelectTrigger
           className={cn(
-            "h-8 min-w-[90px] text-xs font-medium border-0 shadow-none",
+            "h-8 min-w-[60px] text-xs font-medium border-0 shadow-none",
             getStatusColor(currentStatus)
           )}
         >

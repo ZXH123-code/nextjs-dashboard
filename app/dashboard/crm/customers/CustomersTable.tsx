@@ -9,11 +9,19 @@ import { FilterDialog, type FilterField } from "@/components/ui/filter-dialog";
 import { CustomerStatusSelect } from "./CustomerStatusSelect";
 import { FollowUpTimeline } from "../components/FollowUpTimeline";
 import { WriteFollowUpDialog } from "../components/WriteFollowUpDialog";
-import { createManualFollowUpAction, updateCustomerAction } from "@/app/lib/crm-actions";
+import { createManualFollowUpAction, updateCustomerAction, syncLeadContactPhoneToOpportunityAction, syncContactPhoneToLeadAction } from "@/app/lib/crm-actions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { ChevronDown, ChevronUp, MessageSquarePlus, Filter, X } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { ChevronDown, ChevronUp, MessageSquarePlus, Filter, X, Check, Briefcase, UserRound } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { CUSTOMER_STATUS } from "@/app/lib/crm-constants";
 
@@ -30,7 +38,8 @@ type Customer = {
   contactPhone: string | null;
   salesPersonId: string | null;
   salesPerson: { id: string; name: string } | null;
-  opportunity: { id: string; name: string; lead: { contactPhone: string | null } | null } | null;
+  opportunity: { id: string; name: string; lead: { id: string; contactPhone: string | null } | null } | null;
+  createdAt: Date;
 };
 
 type EditingState = { customerId: string; field: string; value: string };
@@ -59,6 +68,15 @@ export function CustomersTable({
   const [savingFields, setSavingFields] = useState<Set<string>>(new Set());
   const [rows, setRows] = useState(customers);
   const [filterOpen, setFilterOpen] = useState(false);
+  /** 客户表修改联系方式成功后，弹框选择同步到商机表/线索表 */
+  const [syncContactPhoneDialog, setSyncContactPhoneDialog] = useState<{
+    newValue: string;
+    opportunityId?: string;
+    leadId?: string;
+    syncToOpportunity: boolean;
+    syncToLead: boolean;
+  } | null>(null);
+  const [isSyncingContactPhone, setIsSyncingContactPhone] = useState(false);
 
   // 定义筛选字段
   const filterFields: FilterField[] = [
@@ -149,6 +167,8 @@ export function CustomersTable({
         return customer.customerTier ?? "";
       case "industry":
         return customer.industry ?? "";
+      case "contactPhone":
+        return customer.contactPhone ?? "";
       case "firstMaintenanceDate":
         return customer.firstMaintenanceDate
           ? customer.firstMaintenanceDate.toISOString().split("T")[0]
@@ -171,7 +191,7 @@ export function CustomersTable({
     }
 
     const fieldKey = `${editing.customerId}:${editing.field}`;
-    
+
     // 如果该字段正在保存，直接返回（避免重复保存）
     if (savingFields.has(fieldKey)) return;
 
@@ -195,7 +215,7 @@ export function CustomersTable({
 
     // 标记为保存中
     setSavingFields((prev) => new Set(prev).add(fieldKey));
-    
+
     // 关闭编辑框，允许用户继续编辑其他字段
     setEditing(null);
 
@@ -208,22 +228,33 @@ export function CustomersTable({
       formData.append("city", customer.city ?? "");
       formData.append("customerTier", customer.customerTier ?? "");
       formData.append("industry", customer.industry ?? "");
+      formData.append("contactPhone", customer.contactPhone ?? "");
       formData.append(
         "firstMaintenanceDate",
         customer.firstMaintenanceDate ? customer.firstMaintenanceDate.toISOString().split("T")[0] : ""
       );
       formData.append("inline", "1");
       formData.set(editingField, editingValue);
-      
+
       const result = await updateCustomerAction(null, formData);
-      
+
       if (result?.error) {
         // 保存失败，回滚UI
         setRows((prev) => prev.map((c) => (c.id === prevRow.id ? prevRow : c)));
         showAlert(result.error, { type: "error", title: "操作失败" });
       } else {
-        // 保存成功，刷新数据
-        router.refresh();
+        if (editingField === "contactPhone" && prevRow.opportunity) {
+          const leadId = prevRow.opportunity.lead?.id;
+          setSyncContactPhoneDialog({
+            newValue: editingValue.trim(),
+            opportunityId: prevRow.opportunity.id,
+            leadId,
+            syncToOpportunity: true,
+            syncToLead: !!leadId,
+          });
+        } else {
+          router.refresh();
+        }
       }
     } catch (e) {
       console.error(e);
@@ -253,7 +284,7 @@ export function CustomersTable({
     const isEditing = editing?.customerId === customer.id && editing?.field === field;
     const fieldKey = `${customer.id}:${field}`;
     const isSaving = savingFields.has(fieldKey);
-    
+
     if (isEditing) {
       return (
         <Input
@@ -266,12 +297,12 @@ export function CustomersTable({
             if (e.key === "Enter") saveCustomerEdit();
             if (e.key === "Escape") setEditing(null);
           }}
-          className="h-8 border-primary"
+          className="h-8 border-primary text-left"
           disabled={isSaving}
         />
       );
     }
-    
+
     return (
       <div
         onClick={() => {
@@ -284,7 +315,7 @@ export function CustomersTable({
           }
         }}
         className={cn(
-          "flex items-center gap-1 rounded px-2 py-1",
+          "flex w-full items-center justify-center gap-1 rounded px-2 py-1",
           isSaving ? "cursor-wait opacity-60" : "cursor-pointer hover:bg-blue-50"
         )}
         title={isSaving ? "保存中..." : "点击编辑"}
@@ -350,22 +381,22 @@ export function CustomersTable({
         <table className="w-full text-left text-sm">
           <thead className="border-b bg-muted/50">
             <tr>
-              <th className="w-10 px-4 py-3 font-medium"></th>
-              <th className="px-4 py-3 font-medium">客户名称</th>
-              <th className="px-4 py-3 font-medium">昵称</th>
-              <th className="px-4 py-3 font-medium">城市</th>
-              <th className="px-4 py-3 font-medium">客户分层</th>
-              <th className="px-4 py-3 font-medium">行业</th>
-              <th className="px-4 py-3 font-medium">联系方式</th>
-              <th className="px-4 py-3 font-medium">初次维护日期</th>
-              <th className="px-4 py-3 font-medium">实际成交金额</th>
-              <th className="px-4 py-3 font-medium">销售人员</th>
-              <th className="px-4 py-3 font-medium">状态</th>
-              <th className="px-4 py-3 font-medium">来源商机</th>
-              <th className="px-4 py-3 font-medium">操作</th>
+              <th className="w-10 px-4 py-3 text-center font-medium"></th>
+              <th className="px-4 py-3 text-center font-medium">客户名称</th>
+              <th className="px-4 py-3 text-center font-medium">昵称</th>
+              <th className="px-4 py-3 text-center font-medium">城市</th>
+              <th className="px-4 py-3 text-center font-medium">客户分层</th>
+              <th className="px-4 py-3 text-center font-medium">行业</th>
+              <th className="px-4 py-3 text-center font-medium">联系方式</th>
+              <th className="px-4 py-3 text-center font-medium">初次维护日期</th>
+              <th className="px-4 py-3 text-center font-medium">实际成交金额</th>
+              <th className="px-4 py-3 text-center font-medium">销售人员</th>
+              <th className="px-4 py-3 text-center font-medium">状态</th>
+              <th className="px-4 py-3 text-center font-medium">来源商机</th>
+              <th className="px-4 py-3 text-center font-medium">操作</th>
             </tr>
           </thead>
-          <tbody>
+          <tbody className="[&_td]:text-center">
             {customers.length === 0 ? (
               <tr>
                 <td
@@ -389,7 +420,7 @@ export function CustomersTable({
                 <Fragment key={customer.id}>
                   <tr
                     id={`customer-row-${customer.id}`}
-                    className={`border-b last:border-0 hover:bg-muted/30 ${highlightId === customer.id ? "bg-yellow-50" : ""}`}
+                    className={`border-b last:border-0 hover:bg-muted/30 ${highlightId === customer.id ? "animate-highlight-row" : ""}`}
                   >
                     <td className="px-4 py-3">
                       <button
@@ -419,7 +450,11 @@ export function CustomersTable({
                       {renderCustomerCell(customer, "industry", customer.industry ?? "-")}
                     </td>
                     <td className="px-4 py-3">
-                      {customer.contactPhone ?? customer.opportunity?.lead?.contactPhone ?? "-"}
+                      {renderCustomerCell(
+                        customer,
+                        "contactPhone",
+                        customer.contactPhone ?? customer.opportunity?.lead?.contactPhone ?? "-"
+                      )}
                     </td>
                     <td className="px-4 py-3">
                       {renderCustomerCell(
@@ -463,7 +498,7 @@ export function CustomersTable({
                       )}
                     </td>
                     <td className="px-4 py-3">
-                      <div className="flex flex-wrap items-center gap-1.5">
+                      <div className="flex items-center gap-1">
                         <Button
                           size="sm"
                           variant="ghost"
@@ -478,9 +513,9 @@ export function CustomersTable({
                   </tr>
                   {expandedCustomerIds.has(customer.id) && (
                     <tr>
-                      <td colSpan={11} className="bg-gray-50 px-4 py-4">
-                        <div className="rounded-lg border border-gray-200 bg-white p-4">
-                          <h4 className="mb-3 font-semibold text-gray-900">
+                      <td colSpan={13} className="bg-gray-50 px-4 py-4 !text-left">
+                        <div className="rounded-lg border border-gray-200 bg-white p-4 text-left">
+                          <h4 className="mb-3 font-semibold text-gray-900 text-left">
                             跟进时间线
                           </h4>
                           <FollowUpTimeline
@@ -511,11 +546,150 @@ export function CustomersTable({
         />
       )}
 
-      {highlightId && (
-        <div className="mt-4 rounded-lg border border-yellow-300 bg-yellow-50 px-4 py-3 text-sm text-yellow-800">
-          当前高亮：从商机表「查看客户」跳转
-        </div>
-      )}
+      {/* 联系方式同步到商机表/线索表 */}
+      <Dialog
+        open={!!syncContactPhoneDialog}
+        onOpenChange={(open) => {
+          if (!open) {
+            setSyncContactPhoneDialog(null);
+            router.refresh();
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>同步联系方式到</DialogTitle>
+            <DialogDescription>
+              将联系方式「{syncContactPhoneDialog?.newValue || "（空）"}」同步到已选表，可勾选需要同步的目标：
+            </DialogDescription>
+          </DialogHeader>
+          {syncContactPhoneDialog && (
+            <div className="flex flex-col gap-2 py-2">
+              {syncContactPhoneDialog.opportunityId && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    setSyncContactPhoneDialog((prev) =>
+                      prev ? { ...prev, syncToOpportunity: !prev.syncToOpportunity } : prev
+                    )
+                  }
+                  className={cn(
+                    "flex items-center gap-3 rounded-lg border-2 px-4 py-3 text-left transition-colors",
+                    syncContactPhoneDialog.syncToOpportunity
+                      ? "border-primary bg-primary/5 text-foreground"
+                      : "border-muted bg-muted/30 text-muted-foreground hover:border-muted-foreground/50"
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "flex h-5 w-5 shrink-0 items-center justify-center rounded border",
+                      syncContactPhoneDialog.syncToOpportunity
+                        ? "border-primary bg-primary text-primary-foreground"
+                        : "border-muted-foreground/40"
+                    )}
+                  >
+                    {syncContactPhoneDialog.syncToOpportunity ? (
+                      <Check className="h-3 w-3" strokeWidth={2.5} />
+                    ) : null}
+                  </span>
+                  <Briefcase className="h-5 w-5 shrink-0" />
+                  <span className="font-medium">商机表</span>
+                </button>
+              )}
+              {syncContactPhoneDialog.leadId && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    setSyncContactPhoneDialog((prev) =>
+                      prev ? { ...prev, syncToLead: !prev.syncToLead } : prev
+                    )
+                  }
+                  className={cn(
+                    "flex items-center gap-3 rounded-lg border-2 px-4 py-3 text-left transition-colors",
+                    syncContactPhoneDialog.syncToLead
+                      ? "border-primary bg-primary/5 text-foreground"
+                      : "border-muted bg-muted/30 text-muted-foreground hover:border-muted-foreground/50"
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "flex h-5 w-5 shrink-0 items-center justify-center rounded border",
+                      syncContactPhoneDialog.syncToLead
+                        ? "border-primary bg-primary text-primary-foreground"
+                        : "border-muted-foreground/40"
+                    )}
+                  >
+                    {syncContactPhoneDialog.syncToLead ? (
+                      <Check className="h-3 w-3" strokeWidth={2.5} />
+                    ) : null}
+                  </span>
+                  <UserRound className="h-5 w-5 shrink-0" />
+                  <span className="font-medium">线索表</span>
+                </button>
+              )}
+            </div>
+          )}
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setSyncContactPhoneDialog(null);
+                router.refresh();
+              }}
+              disabled={isSyncingContactPhone}
+            >
+              仅更新客户表
+            </Button>
+            <Button
+              type="button"
+              onClick={async () => {
+                const d = syncContactPhoneDialog;
+                if (!d) return;
+                setIsSyncingContactPhone(true);
+                try {
+                  const tasks: Promise<{ error?: string } | null>[] = [];
+                  if (d.syncToOpportunity && d.opportunityId)
+                    tasks.push(syncLeadContactPhoneToOpportunityAction(d.opportunityId, d.newValue));
+                  if (d.syncToLead && d.leadId)
+                    tasks.push(syncContactPhoneToLeadAction(d.leadId, d.newValue));
+                  if (tasks.length === 0) {
+                    setSyncContactPhoneDialog(null);
+                    router.refresh();
+                    return;
+                  }
+                  const results = await Promise.all(tasks);
+                  const err = results.find((r) => r?.error);
+                  if (err?.error) {
+                    showAlert(err.error, { type: "error", title: "同步失败" });
+                    return;
+                  }
+                  const parts = [];
+                  if (d.syncToOpportunity && d.opportunityId) parts.push("商机表");
+                  if (d.syncToLead && d.leadId) parts.push("线索表");
+                  showAlert(`联系方式已同步到${parts.join("、")}`, { type: "success", title: "已同步" });
+                  setSyncContactPhoneDialog(null);
+                  router.refresh();
+                } catch (e) {
+                  console.error(e);
+                  showAlert("同步失败，请重试", { type: "error", title: "同步失败" });
+                } finally {
+                  setIsSyncingContactPhone(false);
+                }
+              }}
+              disabled={
+                isSyncingContactPhone ||
+                !(
+                  (syncContactPhoneDialog?.syncToOpportunity && syncContactPhoneDialog?.opportunityId) ||
+                  (syncContactPhoneDialog?.syncToLead && syncContactPhoneDialog?.leadId)
+                )
+              }
+            >
+              {isSyncingContactPhone ? "同步中…" : "同步"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

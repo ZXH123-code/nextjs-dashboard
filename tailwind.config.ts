@@ -65,13 +65,20 @@ const config: Config = {
   			sm: 'calc(var(--radius) - 4px)'
   		}
   	},
-  	keyframes: {
-  		shimmer: {
-  			'100%': {
-  				transform: 'translateX(100%)'
-  			}
-  		}
-  	}
+	keyframes: {
+		shimmer: {
+			'100%': {
+				transform: 'translateX(100%)'
+			}
+		},
+		'highlight-row': {
+			'0%, 100%': { backgroundColor: 'transparent' },
+			'50%': { backgroundColor: 'rgb(219 234 254)' },
+		}
+	},
+	animation: {
+		'highlight-row': 'highlight-row 0.8s ease-in-out 3',
+	}
   },
   plugins: [require('@tailwindcss/forms'), require("tailwindcss-animate")],
 };

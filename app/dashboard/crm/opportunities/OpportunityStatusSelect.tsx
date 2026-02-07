@@ -78,7 +78,7 @@ export function OpportunityStatusSelect({
       <Select value={currentStatus} onValueChange={handleStatusChange}>
         <SelectTrigger
           className={cn(
-            "h-8 min-w-[90px] text-xs font-medium border-0 shadow-none",
+            "h-8 min-w-[60px] gap-2 text-xs font-medium border-0 shadow-none",
             getStatusColor(currentStatus)
           )}
         >

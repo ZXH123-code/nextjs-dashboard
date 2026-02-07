@@ -101,20 +101,34 @@ export async function updateLeadStatusFormAction(formData: FormData) {
   await updateLeadStatusAction(leadId, status);
 }
 
-// 编辑线索（仅 admin），支持表格行内编辑与表单编辑；客户名称可为空（存为「待补全」）
+// 编辑线索：admin 可编辑全部并修改负责人，sales 仅可编辑自己负责的线索（不可改负责人）
 export async function updateLeadAction(
   _prevState: { error?: string } | null,
   formData: FormData
 ): Promise<{ error?: string } | null> {
   const session = await auth();
+  const userId = (session?.user as { id?: string })?.id;
   const role = (session?.user as { role?: string })?.role ?? "sales";
-  if (role !== "admin") return { error: "无权限" };
+  if (!userId) return { error: "未登录" };
 
   const leadId = formData.get("leadId") as string;
   if (!leadId) return { error: "缺少线索ID" };
 
+  const lead = await prisma.crm_lead.findUnique({
+    where: { id: leadId },
+    select: { salesPersonId: true },
+  });
+  if (!(await checkCrmPermission(userId, role, lead))) {
+    return { error: "无权限" };
+  }
+
   const customerNameRaw = (formData.get("customerName") as string) ?? "";
   const customerName = customerNameRaw.trim() ? customerNameRaw.trim() : "（待补全）";
+
+  const salesPersonId =
+    role === "admin"
+      ? (formData.get("salesPersonId") as string) || null
+      : lead?.salesPersonId ?? null;
 
   await updateLead(leadId, {
     customerName,
@@ -125,7 +139,7 @@ export async function updateLeadAction(
     leadSource: (formData.get("leadSource") as string) || undefined,
     customerTier: (formData.get("customerTier") as string) || undefined,
     contactPhone: (formData.get("contactPhone") as string) || undefined,
-    salesPersonId: (formData.get("salesPersonId") as string) || null,
+    salesPersonId,
     status: (formData.get("status") as string) || undefined,
   });
   revalidatePath("/dashboard/crm/leads");
@@ -347,6 +361,8 @@ export async function updateOpportunityAction(
   const expectedCloseDateStr = formData.get("expectedCloseDate") as string;
   const expectedCloseDate = expectedCloseDateStr ? new Date(expectedCloseDateStr) : undefined;
 
+  const contactPhone = (formData.get("contactPhone") as string) ?? "";
+
   await updateOpportunity(opportunityId, {
     name: name.trim(),
     productType: (formData.get("productType") as string) || undefined,
@@ -355,6 +371,7 @@ export async function updateOpportunityAction(
     expectedCloseDate,
     salesPersonId: role === "admin" ? ((formData.get("salesPersonId") as string) || undefined) : undefined,
     deliveryPersonId: (formData.get("deliveryPersonId") as string) || undefined,
+    contactPhone: contactPhone.trim(),
   });
 
   revalidatePath("/dashboard/crm/opportunities");
@@ -451,6 +468,9 @@ export async function updateCustomerAction(
     ? (isNaN(Number(actualAmountStr)) ? null : Number(actualAmountStr))
     : null;
 
+  const contactPhoneRaw = (formData.get("contactPhone") as string) ?? "";
+  const contactPhone = contactPhoneRaw.trim();
+
   await updateCustomer(customerId, {
     name,
     nickname: (formData.get("nickname") as string) || undefined,
@@ -462,12 +482,117 @@ export async function updateCustomerAction(
     tags: (formData.get("tags") as string) || undefined,
     mainProducts: (formData.get("mainProducts") as string) || undefined,
     actualAmount,
+    contactPhone,
   });
 
   revalidatePath("/dashboard/crm/customers");
   revalidatePath("/dashboard");
   const isInline = formData.get("inline") === "1";
   if (!isInline) redirect("/dashboard/crm/customers");
+  return {};
+}
+
+/** 仅同步客户名称（用于线索表改完客户名称后询问是否同步到客户表） */
+export async function syncLeadNameToCustomerAction(
+  customerId: string,
+  name: string
+): Promise<{ error?: string } | null> {
+  const session = await auth();
+  const userId = (session?.user as { id?: string })?.id;
+  const role = (session?.user as { role?: string })?.role ?? "sales";
+  if (!userId) return { error: "未登录" };
+
+  const trimmed = name?.trim();
+  if (!trimmed) return { error: "客户名称不能为空" };
+
+  const customer = await prisma.crm_customer.findUnique({
+    where: { id: customerId },
+    select: { salesPersonId: true },
+  });
+  if (!(await checkCrmPermission(userId, role, customer))) {
+    return { error: "无权限" };
+  }
+
+  await updateCustomer(customerId, { name: trimmed });
+  revalidatePath("/dashboard/crm/customers");
+  revalidatePath("/dashboard/crm/leads");
+  revalidatePath("/dashboard");
+  return {};
+}
+
+/** 仅同步客户联系方式（用于线索表改完联系方式后询问是否同步到客户表） */
+export async function syncLeadContactPhoneToCustomerAction(
+  customerId: string,
+  contactPhone: string
+): Promise<{ error?: string } | null> {
+  const session = await auth();
+  const userId = (session?.user as { id?: string })?.id;
+  const role = (session?.user as { role?: string })?.role ?? "sales";
+  if (!userId) return { error: "未登录" };
+
+  const customer = await prisma.crm_customer.findUnique({
+    where: { id: customerId },
+    select: { salesPersonId: true },
+  });
+  if (!(await checkCrmPermission(userId, role, customer))) {
+    return { error: "无权限" };
+  }
+
+  await updateCustomer(customerId, { contactPhone: contactPhone?.trim() ?? "" });
+  revalidatePath("/dashboard/crm/customers");
+  revalidatePath("/dashboard/crm/leads");
+  revalidatePath("/dashboard");
+  return {};
+}
+
+/** 仅同步商机联系方式（用于线索表改完联系方式后询问是否同步到商机表） */
+export async function syncLeadContactPhoneToOpportunityAction(
+  opportunityId: string,
+  contactPhone: string
+): Promise<{ error?: string } | null> {
+  const session = await auth();
+  const userId = (session?.user as { id?: string })?.id;
+  const role = (session?.user as { role?: string })?.role ?? "sales";
+  if (!userId) return { error: "未登录" };
+
+  const opp = await prisma.crm_opportunity.findUnique({
+    where: { id: opportunityId },
+    select: { salesPersonId: true },
+  });
+  if (!(await checkCrmPermission(userId, role, opp))) {
+    return { error: "无权限" };
+  }
+
+  await updateOpportunity(opportunityId, { contactPhone: contactPhone?.trim() ?? "" });
+  revalidatePath("/dashboard/crm/opportunities");
+  revalidatePath("/dashboard/crm/leads");
+  revalidatePath("/dashboard");
+  return {};
+}
+
+/** 仅同步线索联系方式（用于商机表/客户表改完联系方式后询问是否同步到线索表） */
+export async function syncContactPhoneToLeadAction(
+  leadId: string,
+  contactPhone: string
+): Promise<{ error?: string } | null> {
+  const session = await auth();
+  const userId = (session?.user as { id?: string })?.id;
+  const role = (session?.user as { role?: string })?.role ?? "sales";
+  if (!userId) return { error: "未登录" };
+
+  const lead = await prisma.crm_lead.findUnique({
+    where: { id: leadId },
+    select: { salesPersonId: true },
+  });
+  if (!(await checkCrmPermission(userId, role, lead))) {
+    return { error: "无权限" };
+  }
+
+  await updateLead(leadId, { contactPhone: contactPhone?.trim() ?? "" });
+  revalidatePath("/dashboard/crm/leads");
+  revalidatePath("/dashboard/crm/opportunities");
+  revalidatePath("/dashboard/crm/customers");
+  revalidatePath("/dashboard");
   return {};
 }
 
