@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Trash2, RotateCcw, AlertTriangle, Sparkles } from "lucide-react";
 import { useAlert } from "@/hooks/use-alert";
 import { useConfirm } from "@/hooks/use-confirm";
+import { useRouter } from "next/navigation";
 
 type DeletedLead = {
   id: string;
@@ -18,6 +19,7 @@ type DeletedLead = {
 };
 
 export function RecycleBinSection({ deletedLeads }: { deletedLeads: DeletedLead[] }) {
+  const router = useRouter();
   const [processing, setProcessing] = useState<string | null>(null);
   const [cleaning, setCleaning] = useState(false);
   const { showAlert, AlertComponent } = useAlert();
@@ -34,7 +36,7 @@ export function RecycleBinSection({ deletedLeads }: { deletedLeads: DeletedLead[
         showAlert(result.error, { type: "error", title: "恢复失败" });
       } else {
         showAlert("线索已恢复", { type: "success", title: "恢复成功" });
-        window.location.reload();
+        router.refresh();
       }
     } catch (error) {
       showAlert("恢复失败，请稍后重试", { type: "error", title: "恢复失败" });
@@ -62,7 +64,7 @@ export function RecycleBinSection({ deletedLeads }: { deletedLeads: DeletedLead[
       await deleteLeadAction(formData);
 
       showAlert("线索已彻底删除", { type: "success", title: "删除成功" });
-      window.location.reload();
+      router.refresh();
     } catch (error) {
       showAlert("删除失败，请稍后重试", { type: "error", title: "删除失败" });
     } finally {
@@ -99,7 +101,7 @@ export function RecycleBinSection({ deletedLeads }: { deletedLeads: DeletedLead[
           title: "清理成功"
         });
         if (result.count > 0) {
-          window.location.reload();
+          router.refresh();
         }
       }
     } catch (error) {
@@ -134,21 +136,21 @@ export function RecycleBinSection({ deletedLeads }: { deletedLeads: DeletedLead[
     <>
       <AlertComponent />
       <ConfirmComponent />
-      <div className="mt-6">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-amber-500/10">
-              <Trash2 className="h-5 w-5 text-amber-600" />
+      <div className="rounded-lg border bg-card overflow-hidden">
+        {deletedLeads.length === 0 ? (
+          <div className="px-6 py-16 text-center text-muted-foreground">
+            <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-muted">
+              <Trash2 className="h-7 w-7 opacity-50" />
             </div>
-            <div>
-              <h2 className="text-lg font-semibold">线索回收站</h2>
-              <p className="text-sm text-muted-foreground">
-                已删除的线索可在此恢复或彻底删除
-              </p>
-            </div>
+            <p className="font-medium text-foreground">回收站为空</p>
+            <p className="mt-1 text-sm">已删除的线索将出现在此处，可恢复或彻底删除</p>
           </div>
-          {deletedLeads.length > 0 && (
-            <div className="flex items-center gap-2">
+        ) : (
+          <>
+            <div className="flex flex-col gap-4 border-b bg-muted/30 px-6 py-4 sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-sm text-muted-foreground">
+                共 <span className="font-medium text-foreground">{deletedLeads.length}</span> 条已删除线索
+              </p>
               <Button
                 variant="outline"
                 size="sm"
@@ -159,45 +161,32 @@ export function RecycleBinSection({ deletedLeads }: { deletedLeads: DeletedLead[
                 {cleaning ? "清理中..." : "清理 90 天前的记录"}
               </Button>
             </div>
-          )}
-        </div>
-
-        <div className="rounded-lg border bg-card overflow-hidden">
-          {deletedLeads.length === 0 ? (
-            <div className="px-6 py-12 text-center text-muted-foreground">
-              <Trash2 className="h-12 w-12 mx-auto mb-3 opacity-20" />
-              <p>回收站为空</p>
-              <p className="text-xs mt-1">已删除的线索将出现在此处</p>
-            </div>
-          ) : (
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b bg-muted/50">
-                  <th className="px-6 py-4 text-left font-medium">客户名称</th>
-                  <th className="px-6 py-4 text-left font-medium">城市</th>
-                  <th className="px-6 py-4 text-left font-medium">状态</th>
-                  <th className="px-6 py-4 text-left font-medium">销售人员</th>
-                  <th className="px-6 py-4 text-left font-medium">删除时间</th>
-                  <th className="px-6 py-4 text-left font-medium">关联状态</th>
-                  <th className="px-6 py-4 text-left font-medium">操作</th>
+                  <th className="px-6 py-3 text-left font-medium">客户名称</th>
+                  <th className="px-6 py-3 text-left font-medium">城市</th>
+                  <th className="px-6 py-3 text-left font-medium">状态</th>
+                  <th className="px-6 py-3 text-left font-medium">销售人员</th>
+                  <th className="px-6 py-3 text-left font-medium">删除时间</th>
+                  <th className="px-6 py-3 text-left font-medium">关联状态</th>
+                  <th className="px-6 py-3 text-right font-medium">操作</th>
                 </tr>
               </thead>
               <tbody>
                 {deletedLeads.map((lead) => (
-                  <tr key={lead.id} className="border-b last:border-0 hover:bg-muted/30">
-                    <td className="px-6 py-4 font-medium">{lead.customerName}</td>
-                    <td className="px-6 py-4 text-muted-foreground">
-                      {lead.city || "-"}
-                    </td>
-                    <td className="px-6 py-4">
+                  <tr key={lead.id} className="border-b last:border-0 hover:bg-muted/20">
+                    <td className="px-6 py-3 font-medium">{lead.customerName}</td>
+                    <td className="px-6 py-3 text-muted-foreground">{lead.city || "-"}</td>
+                    <td className="px-6 py-3">
                       <span className="inline-flex px-2 py-0.5 rounded text-xs bg-muted text-muted-foreground">
                         {lead.status}
                       </span>
                     </td>
-                    <td className="px-6 py-4 text-muted-foreground">
+                    <td className="px-6 py-3 text-muted-foreground">
                       {lead.salesPerson?.name || "未分配"}
                     </td>
-                    <td className="px-6 py-4 text-muted-foreground text-xs">
+                    <td className="px-6 py-3 text-muted-foreground text-xs">
                       {lead.deletedAt ? (
                         <>
                           {new Date(lead.deletedAt).toLocaleDateString("zh-CN")}
@@ -209,24 +198,19 @@ export function RecycleBinSection({ deletedLeads }: { deletedLeads: DeletedLead[
                         "-"
                       )}
                     </td>
-                    <td className="px-6 py-4">
+                    <td className="px-6 py-3">
                       {lead.opportunity ? (
-                        <div className="flex items-center gap-1 text-xs">
-                          <span className="text-amber-600">已转商机</span>
-                          <span className="text-muted-foreground">
-                            ({lead.opportunity.status})
-                          </span>
-                        </div>
+                        <span className="text-xs text-amber-600">已转商机</span>
                       ) : (
                         <span className="text-muted-foreground text-xs">未转化</span>
                       )}
                     </td>
-                    <td className="px-6 py-4">
-                      <div className="flex items-center gap-2">
+                    <td className="px-6 py-3 text-right">
+                      <div className="flex items-center justify-end gap-2">
                         <Button
                           variant="ghost"
                           size="sm"
-                          className="h-8 gap-1 text-blue-600 hover:bg-blue-50 hover:text-blue-700"
+                          className="h-8 gap-1.5 text-primary hover:bg-primary/10 hover:text-primary"
                           onClick={() => handleRestore(lead.id, lead.customerName)}
                           disabled={processing === lead.id}
                         >
@@ -236,7 +220,7 @@ export function RecycleBinSection({ deletedLeads }: { deletedLeads: DeletedLead[
                         <Button
                           variant="ghost"
                           size="sm"
-                          className="h-8 gap-1 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                          className="h-8 gap-1.5 text-destructive hover:bg-destructive/10 hover:text-destructive"
                           onClick={() =>
                             handlePermanentDelete(lead.id, lead.customerName, !!lead.opportunity)
                           }
@@ -251,24 +235,19 @@ export function RecycleBinSection({ deletedLeads }: { deletedLeads: DeletedLead[
                 ))}
               </tbody>
             </table>
-          )}
-        </div>
-
-        {deletedLeads.length > 0 && (
-          <div className="mt-4 rounded-lg border bg-amber-500/10 border-amber-500/20 p-4 text-sm">
-            <div className="flex items-start gap-2">
-              <AlertTriangle className="h-4 w-4 text-amber-600 mt-0.5 flex-shrink-0" />
-              <div className="text-amber-700 dark:text-amber-400">
-                <p className="font-medium">删除说明</p>
-                <ul className="mt-2 space-y-1 text-xs">
-                  <li>• <strong>恢复</strong>：将线索恢复到线索列表，关联的商机和客户保持不变</li>
-                  <li>• <strong>彻底删除</strong>：永久删除线索及其关联的商机、客户、跟进记录（不可恢复）</li>
-                  <li>• <strong>自动清理</strong>：超过 90 天的已删除记录会被定期清理</li>
-                  <li className="text-amber-600">• 已转为商机的线索被彻底删除后，商机和客户也会被删除，请谨慎操作</li>
-                </ul>
+            <div className="border-t bg-muted/20 px-6 py-4">
+              <div className="flex items-start gap-2 text-sm">
+                <AlertTriangle className="h-4 w-4 text-amber-600 mt-0.5 flex-shrink-0" />
+                <div className="text-muted-foreground">
+                  <p className="font-medium text-foreground">说明</p>
+                  <ul className="mt-1.5 space-y-1 text-xs">
+                    <li>· <strong>恢复</strong>：将线索恢复到线索列表，关联的商机、客户不变</li>
+                    <li>· <strong>彻底删除</strong>：永久删除线索及关联商机、客户（不可恢复）</li>
+                  </ul>
+                </div>
               </div>
             </div>
-          </div>
+          </>
         )}
       </div>
     </>

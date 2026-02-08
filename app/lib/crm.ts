@@ -5,6 +5,7 @@
  */
 
 import { auth } from "@/auth";
+import { del } from "@vercel/blob";
 import { prisma } from "./prisma";
 
 /** 获取当前用户的 CRM 权限上下文，供数据层过滤使用（role 从数据库读取，确保与 DB 同步） */
@@ -76,7 +77,7 @@ export async function getLeads(auth: CrmAuth, includeDeleted = false) {
   const where = buildLeadWhere(auth, includeDeleted);
   return prisma.crm_lead.findMany({
     where,
-    orderBy: { createdAt: "desc" },
+    orderBy: [{ isKeyFocus: "desc" }, { createdAt: "desc" }],
     include: {
       salesPerson: { select: { id: true, name: true } },
       opportunity: {
@@ -189,6 +190,7 @@ export async function updateLead(
     contactPhone?: string;
     salesPersonId?: string | null;
     status?: string;
+    isKeyFocus?: boolean;
   }
 ) {
   return prisma.crm_lead.update({
@@ -204,7 +206,46 @@ export async function updateLead(
       ...(data.contactPhone !== undefined && { contactPhone: data.contactPhone }),
       ...(data.salesPersonId !== undefined && { salesPersonId: data.salesPersonId }),
       ...(data.status != null && { status: data.status }),
+      ...(data.isKeyFocus !== undefined && { isKeyFocus: data.isKeyFocus }),
     },
+  });
+}
+
+/**
+ * 设置线索为重点关注，并同步到其派生的商机、客户
+ * @param byAdmin true=管理员操作（蓝星、sales 不可取消），false=sales 自助（琥珀星、可取消）；sales 无法修改 keyFocusByAdmin 为 true 的线索
+ */
+export async function setLeadKeyFocus(leadId: string, isKeyFocus: boolean, byAdmin: boolean) {
+  const lead = await prisma.crm_lead.findUnique({
+    where: { id: leadId, deletedAt: null },
+    select: {
+      keyFocusByAdmin: true,
+      opportunity: { select: { id: true, customer: { select: { id: true } } } },
+    },
+  });
+  if (!lead) return;
+  const leadRow = lead as { keyFocusByAdmin?: boolean };
+  if (!byAdmin && leadRow.keyFocusByAdmin) return; // sales 不可取消管理员标的重点
+
+  const keyFocusByAdmin = byAdmin ? isKeyFocus : !!leadRow.keyFocusByAdmin;
+
+  await prisma.$transaction(async (tx) => {
+    await tx.crm_lead.update({
+      where: { id: leadId },
+      data: { isKeyFocus, keyFocusByAdmin },
+    });
+    if (lead.opportunity) {
+      await tx.crm_opportunity.update({
+        where: { id: lead.opportunity.id },
+        data: { isKeyFocus, keyFocusByAdmin },
+      });
+      if (lead.opportunity.customer) {
+        await tx.crm_customer.update({
+          where: { id: lead.opportunity.customer.id },
+          data: { isKeyFocus, keyFocusByAdmin },
+        });
+      }
+    }
   });
 }
 
@@ -311,7 +352,7 @@ export async function getOpportunities(auth: CrmAuth) {
   const where = !auth ? emptyWhere : auth.role === "admin" ? {} : salesFilter(auth.userId);
   const rows = await prisma.crm_opportunity.findMany({
     where,
-    orderBy: { createdAt: "desc" },
+    orderBy: [{ isKeyFocus: "desc" }, { createdAt: "desc" }],
     include: {
       lead: { select: { id: true, customerName: true, contactPhone: true } },
       salesPerson: { select: { id: true, name: true } },
@@ -336,15 +377,21 @@ export async function createOpportunity(data: {
   salesPersonId?: string;
   deliveryPersonId?: string;
   contactPhone?: string;
+  isKeyFocus?: boolean;
+  keyFocusByAdmin?: boolean;
 }) {
-  // 如果提供了 leadId，从线索继承 contactPhone
+  // 如果提供了 leadId，从线索继承 contactPhone、isKeyFocus、keyFocusByAdmin
   let contactPhone = data.contactPhone;
-  if (data.leadId && !contactPhone) {
+  let isKeyFocus = data.isKeyFocus;
+  let keyFocusByAdmin = data.keyFocusByAdmin;
+  if (data.leadId) {
     const lead = await prisma.crm_lead.findUnique({
       where: { id: data.leadId },
-      select: { contactPhone: true },
-    });
-    contactPhone = lead?.contactPhone ?? undefined;
+      select: { contactPhone: true, isKeyFocus: true, keyFocusByAdmin: true },
+    }) as { contactPhone?: string | null; isKeyFocus?: boolean; keyFocusByAdmin?: boolean } | null;
+    if (contactPhone == null) contactPhone = lead?.contactPhone ?? undefined;
+    if (isKeyFocus == null) isKeyFocus = lead?.isKeyFocus ?? false;
+    if (keyFocusByAdmin == null) keyFocusByAdmin = lead?.keyFocusByAdmin ?? false;
   }
 
   return prisma.crm_opportunity.create({
@@ -358,6 +405,8 @@ export async function createOpportunity(data: {
       salesPersonId: data.salesPersonId,
       deliveryPersonId: data.deliveryPersonId,
       contactPhone,
+      isKeyFocus: isKeyFocus ?? false,
+      keyFocusByAdmin: keyFocusByAdmin ?? false,
     },
   });
 }
@@ -404,7 +453,7 @@ export async function getCustomers(auth: CrmAuth) {
   const where = !auth ? emptyWhere : auth.role === "admin" ? {} : salesFilter(auth.userId);
   const rows = await prisma.crm_customer.findMany({
     where,
-    orderBy: { createdAt: "desc" },
+    orderBy: [{ isKeyFocus: "desc" }, { createdAt: "desc" }],
     include: {
       opportunity: {
         select: {
@@ -437,15 +486,24 @@ export async function createCustomer(data: {
   status?: string;
   actualAmount?: number | null;
   contactPhone?: string;
+  isKeyFocus?: boolean;
+  keyFocusByAdmin?: boolean;
 }) {
-  // 如果提供了 opportunityId，从商机/线索继承 contactPhone
+  // 如果提供了 opportunityId，从商机/线索继承 contactPhone、isKeyFocus、keyFocusByAdmin
   let contactPhone = data.contactPhone;
-  if (data.opportunityId && !contactPhone) {
+  let isKeyFocus = data.isKeyFocus;
+  let keyFocusByAdmin = data.keyFocusByAdmin;
+  if (data.opportunityId) {
     const opportunity = await prisma.crm_opportunity.findUnique({
       where: { id: data.opportunityId },
-      include: { lead: { select: { contactPhone: true } } },
-    });
-    contactPhone = opportunity?.contactPhone ?? opportunity?.lead?.contactPhone ?? undefined;
+      include: { lead: { select: { contactPhone: true, isKeyFocus: true, keyFocusByAdmin: true } } },
+    }) as { contactPhone?: string | null; isKeyFocus?: boolean; keyFocusByAdmin?: boolean; lead?: { contactPhone?: string | null; isKeyFocus?: boolean; keyFocusByAdmin?: boolean } | null } | null;
+    if (contactPhone == null)
+      contactPhone = opportunity?.contactPhone ?? opportunity?.lead?.contactPhone ?? undefined;
+    if (isKeyFocus == null)
+      isKeyFocus = opportunity?.isKeyFocus ?? opportunity?.lead?.isKeyFocus ?? false;
+    if (keyFocusByAdmin == null)
+      keyFocusByAdmin = opportunity?.keyFocusByAdmin ?? opportunity?.lead?.keyFocusByAdmin ?? false;
   }
 
   return prisma.crm_customer.create({
@@ -463,6 +521,8 @@ export async function createCustomer(data: {
       status: data.status ?? "已签约",
       actualAmount: data.actualAmount ?? null,
       contactPhone,
+      isKeyFocus: isKeyFocus ?? false,
+      keyFocusByAdmin: keyFocusByAdmin ?? false,
     },
   });
 }
@@ -481,6 +541,7 @@ export async function updateCustomer(
     mainProducts?: string;
     actualAmount?: number | null;
     contactPhone?: string;
+    salesPersonId?: string | null;
   }
 ) {
   return prisma.crm_customer.update({
@@ -497,8 +558,49 @@ export async function updateCustomer(
       mainProducts: data.mainProducts,
       actualAmount: data.actualAmount,
       ...(data.contactPhone !== undefined && { contactPhone: data.contactPhone }),
+      ...(data.salesPersonId !== undefined && { salesPersonId: data.salesPersonId }),
     },
   });
+}
+
+/** 批量更新客户负责人 */
+export async function updateCustomerSalesPersonBatch(
+  customerIds: string[],
+  salesPersonId: string | null
+) {
+  if (customerIds.length === 0) return;
+  await prisma.crm_customer.updateMany({
+    where: { id: { in: customerIds } },
+    data: { salesPersonId },
+  });
+}
+
+/** 批量删除客户：先解除跟进记录关联、删掉客户（级联删资料记录），再删除 Vercel Blob 上的资料文件 */
+export async function deleteCustomers(customerIds: string[]) {
+  if (customerIds.length === 0) return;
+  const materials = await prisma.crm_customer_material.findMany({
+    where: { customerId: { in: customerIds } },
+    select: { blobUrl: true },
+  });
+  const blobUrls = materials.map((m) => m.blobUrl);
+
+  await prisma.$transaction(async (tx) => {
+    await tx.crm_follow_up.updateMany({
+      where: { customerId: { in: customerIds } },
+      data: { customerId: null },
+    });
+    await tx.crm_customer.deleteMany({
+      where: { id: { in: customerIds } },
+    });
+  });
+
+  for (const url of blobUrls) {
+    try {
+      await del(url);
+    } catch (e) {
+      console.warn("删除客户资料 Blob 失败（可能已不存在）:", url, e);
+    }
+  }
 }
 
 // ============ 跟进记录 ============
@@ -692,6 +794,7 @@ export async function leadToOpportunity(leadId: string) {
   const existing = await prisma.crm_opportunity.findUnique({ where: { leadId } });
   if (existing) throw new Error("该线索已转入商机");
 
+  const leadRow = lead as { isKeyFocus?: boolean; keyFocusByAdmin?: boolean };
   const opportunity = await prisma.crm_opportunity.create({
     data: {
       name: lead.customerName,
@@ -700,6 +803,8 @@ export async function leadToOpportunity(leadId: string) {
       status: "初步沟通",
       salesPersonId: lead.salesPersonId,
       contactPhone: lead.contactPhone, // 继承线索的联系方式
+      isKeyFocus: leadRow.isKeyFocus ?? false,
+      keyFocusByAdmin: leadRow.keyFocusByAdmin ?? false,
     },
   });
 
@@ -722,6 +827,7 @@ export async function opportunityToCustomer(opportunityId: string) {
   // 继承联系方式：优先使用商机的 contactPhone，否则使用线索的 contactPhone
   const contactPhone = opp.contactPhone ?? lead?.contactPhone ?? null;
 
+  const oppRow = opp as { isKeyFocus?: boolean; keyFocusByAdmin?: boolean };
   const customer = await prisma.crm_customer.create({
     data: {
       name: lead?.customerName ?? opp.name,
@@ -733,6 +839,8 @@ export async function opportunityToCustomer(opportunityId: string) {
       salesPersonId: opp.salesPersonId,
       status: opp.status === "已赢单" ? "已签约" : "预备签约",
       contactPhone,
+      isKeyFocus: oppRow.isKeyFocus ?? false,
+      keyFocusByAdmin: oppRow.keyFocusByAdmin ?? false,
     },
   });
 
@@ -845,4 +953,153 @@ export async function markNotificationsAsSent(notificationIds: string[]) {
     where: { id: { in: notificationIds } },
     data: { notified: true, notifiedAt: new Date() },
   });
+}
+
+/** 通知中心：获取当前用户相关的指派/转派简讯（被指派、被转走等） */
+export async function getNotificationsForUser(auth: CrmAuth, limit = 50) {
+  if (!auth) return [];
+
+  const where =
+    auth.role === "admin"
+      ? {}
+      : {
+          OR: [
+            { oldSalesPersonId: auth.userId },
+            { newSalesPersonId: auth.userId },
+          ],
+        };
+
+  return prisma.crm_lead_assignment_notification.findMany({
+    where,
+    orderBy: { createdAt: "desc" },
+    take: limit,
+    include: {
+      lead: { select: { id: true, customerName: true } },
+      oldSalesPerson: { select: { id: true, name: true } },
+      newSalesPerson: { select: { id: true, name: true } },
+    },
+  });
+}
+
+/** 全局搜索：线索、商机、客户（遵守 CRM 权限），分栏展示，每表单独分页 */
+export type GlobalSearchItem = {
+  type: "lead" | "opportunity" | "customer";
+  id: string;
+  title: string;
+  subtitle?: string;
+  createdAt: Date;
+};
+
+export type GlobalSearchResult = {
+  leads: { items: GlobalSearchItem[]; total: number };
+  opportunities: { items: GlobalSearchItem[]; total: number };
+  customers: { items: GlobalSearchItem[]; total: number };
+};
+
+const SEARCH_PAGE_SIZE = 5;
+
+export async function globalSearchCrm(
+  auth: CrmAuth,
+  keyword: string,
+  leadPage: number,
+  oppPage: number,
+  customerPage: number
+): Promise<GlobalSearchResult> {
+  const k = keyword?.trim();
+  const empty = { items: [] as GlobalSearchItem[], total: 0 };
+  if (!auth || !k) {
+    return { leads: empty, opportunities: empty, customers: empty };
+  }
+
+  const baseWhere = auth.role === "admin" ? {} : salesFilter(auth.userId);
+  const leadBase = buildLeadWhere(auth);
+  const orLead = [
+    { customerName: { contains: k, mode: "insensitive" as const } },
+    { nickname: { contains: k, mode: "insensitive" as const } },
+    { contactPhone: { contains: k, mode: "insensitive" as const } },
+    { city: { contains: k, mode: "insensitive" as const } },
+    { address: { contains: k, mode: "insensitive" as const } },
+    { industry: { contains: k, mode: "insensitive" as const } },
+    { leadSource: { contains: k, mode: "insensitive" as const } },
+    { customerTier: { contains: k, mode: "insensitive" as const } },
+    { salesPerson: { name: { contains: k, mode: "insensitive" as const } } },
+  ];
+  const orOpp = [
+    { name: { contains: k, mode: "insensitive" as const } },
+    { productType: { contains: k, mode: "insensitive" as const } },
+    { contactPhone: { contains: k, mode: "insensitive" as const } },
+    { lostReason: { contains: k, mode: "insensitive" as const } },
+    { salesPerson: { name: { contains: k, mode: "insensitive" as const } } },
+    { deliveryPerson: { name: { contains: k, mode: "insensitive" as const } } },
+  ];
+  const orCustomer = [
+    { name: { contains: k, mode: "insensitive" as const } },
+    { nickname: { contains: k, mode: "insensitive" as const } },
+    { city: { contains: k, mode: "insensitive" as const } },
+    { industry: { contains: k, mode: "insensitive" as const } },
+    { contactPhone: { contains: k, mode: "insensitive" as const } },
+    { customerTier: { contains: k, mode: "insensitive" as const } },
+    { mainProducts: { contains: k, mode: "insensitive" as const } },
+    { tags: { contains: k, mode: "insensitive" as const } },
+    { salesPerson: { name: { contains: k, mode: "insensitive" as const } } },
+  ];
+
+  const leadWhere = { ...leadBase, OR: orLead };
+  const oppWhere = { ...baseWhere, OR: orOpp };
+  const customerWhere = { ...baseWhere, OR: orCustomer };
+
+  const [leadsCount, oppsCount, customersCount, leads, opportunities, customers] = await Promise.all([
+    prisma.crm_lead.count({ where: leadWhere }),
+    prisma.crm_opportunity.count({ where: oppWhere }),
+    prisma.crm_customer.count({ where: customerWhere }),
+    prisma.crm_lead.findMany({
+      where: leadWhere,
+      orderBy: { createdAt: "desc" },
+      skip: leadPage * SEARCH_PAGE_SIZE,
+      take: SEARCH_PAGE_SIZE,
+      select: { id: true, customerName: true, contactPhone: true, createdAt: true },
+    }),
+    prisma.crm_opportunity.findMany({
+      where: oppWhere,
+      orderBy: { createdAt: "desc" },
+      skip: oppPage * SEARCH_PAGE_SIZE,
+      take: SEARCH_PAGE_SIZE,
+      select: { id: true, name: true, contactPhone: true, createdAt: true },
+    }),
+    prisma.crm_customer.findMany({
+      where: customerWhere,
+      orderBy: { createdAt: "desc" },
+      skip: customerPage * SEARCH_PAGE_SIZE,
+      take: SEARCH_PAGE_SIZE,
+      select: { id: true, name: true, contactPhone: true, createdAt: true },
+    }),
+  ]);
+
+  const leadItems: GlobalSearchItem[] = leads.map((l) => ({
+    type: "lead",
+    id: l.id,
+    title: l.customerName,
+    subtitle: l.contactPhone ?? undefined,
+    createdAt: l.createdAt,
+  }));
+  const oppItems: GlobalSearchItem[] = opportunities.map((o) => ({
+    type: "opportunity",
+    id: o.id,
+    title: o.name,
+    subtitle: o.contactPhone ?? undefined,
+    createdAt: o.createdAt,
+  }));
+  const customerItems: GlobalSearchItem[] = customers.map((c) => ({
+    type: "customer",
+    id: c.id,
+    title: c.name,
+    subtitle: c.contactPhone ?? undefined,
+    createdAt: c.createdAt,
+  }));
+
+  return {
+    leads: { items: leadItems, total: leadsCount },
+    opportunities: { items: oppItems, total: oppsCount },
+    customers: { items: customerItems, total: customersCount },
+  };
 }

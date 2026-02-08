@@ -28,6 +28,14 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import {
   Pencil,
@@ -43,6 +51,8 @@ import {
   Filter,
   X,
   FileText,
+  Loader2,
+  Star,
 } from "lucide-react";
 import {
   Sheet,
@@ -52,8 +62,11 @@ import {
 } from "@/components/ui/sheet";
 import { FollowUpTimeline } from "../components/FollowUpTimeline";
 import { WriteFollowUpDialog } from "../components/WriteFollowUpDialog";
-import { createManualFollowUpAction, updateLeadAction, softDeleteLeadAction, syncLeadNameToCustomerAction, syncLeadContactPhoneToCustomerAction, syncLeadContactPhoneToOpportunityAction } from "@/app/lib/crm-actions";
+import { createManualFollowUpAction, updateLeadAction, softDeleteLeadAction, syncLeadNameToCustomerAction, syncLeadContactPhoneToCustomerAction, syncLeadContactPhoneToOpportunityAction, batchUpdateLeadSalesPersonWithFollowUpAction, toggleLeadKeyFocusAction, batchSetLeadKeyFocusAction, batchSoftDeleteLeadsAction } from "@/app/lib/crm-actions";
 import { LEAD_STATUS } from "@/app/lib/crm-constants";
+
+/** 线索表中客户名称列显示的最大字符数，超出以 ... 代替 */
+const MAX_CUSTOMER_NAME_DISPLAY = 15;
 
 type Lead = {
   id: string;
@@ -70,6 +83,8 @@ type Lead = {
   salesPersonId: string | null;
   salesPerson: { id: string; name: string } | null;
   isClaimed?: boolean;
+  isKeyFocus?: boolean;
+  keyFocusByAdmin?: boolean;
   opportunity: {
     id: string;
     name: string;
@@ -120,22 +135,142 @@ export function LeadsTableWithBulk({
   const [isSyncingToCustomer, setIsSyncingToCustomer] = useState(false);
   /** 查看记录：打开详情滑层的线索 id */
   const [detailLeadId, setDetailLeadId] = useState<string | null>(null);
+  /** 批量选择：仅对当前筛选结果（filteredData）多选/全选 */
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  /** 右键菜单位置，有值时显示操作菜单 */
+  const [contextMenuAt, setContextMenuAt] = useState<{ x: number; y: number } | null>(null);
+  /** 批量指定对话框 */
+  const [batchAssignOpen, setBatchAssignOpen] = useState(false);
+  const [batchAssignSalesPersonId, setBatchAssignSalesPersonId] = useState("");
+  /** 用户补充的跟进说明（选填），与自动生成的默认说明分开 */
+  const [batchAssignSupplement, setBatchAssignSupplement] = useState("");
+  const [batchAssignLoading, setBatchAssignLoading] = useState(false);
+  const [batchAssignError, setBatchAssignError] = useState("");
 
-  // 定义筛选字段
+  // 定义筛选字段 - 包含线索表的所有有意义的字段
   const filterFields: FilterField[] = [
     { key: "customerName", label: "客户名称", type: "text" },
     { key: "nickname", label: "昵称", type: "text" },
     { key: "city", label: "城市", type: "text" },
+    { key: "address", label: "地址", type: "text" },
     { key: "industry", label: "行业", type: "text" },
     { key: "leadSource", label: "线索来源", type: "text" },
     { key: "contactPhone", label: "联系方式", type: "text" },
+    { key: "customerTier", label: "客户等级", type: "text" },
     { key: "status", label: "状态", type: "select", options: LEAD_STATUS.map(s => ({ value: s, label: s })) },
     { key: "salesPerson.name", label: "销售人员", type: "text" },
+    { key: "isKeyFocus", label: "重点关注", type: "boolean" },
+    { key: "keyFocusByAdmin", label: "管理员标注", type: "boolean" },
     { key: "createdAt", label: "创建时间", type: "date" },
   ];
 
   // 使用筛选 Hook
-  const { filteredData, conditions, applyFilter, clearFilter, hasActiveFilters } = useFilter(rows, filterFields);
+  const { filteredData, conditions, groups, applyFilter, clearFilter, hasActiveFilters, activeFilterCount } = useFilter(rows, filterFields);
+
+  // 当前页/筛选结果的所有 id（全选仅作用于当前筛选结果）
+  const filteredIds = filteredData.map((l) => l.id);
+  const allFilteredSelected =
+    filteredIds.length > 0 && filteredIds.every((id) => selectedIds.has(id));
+
+  const toggleSelectAll = () => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (allFilteredSelected) {
+        filteredIds.forEach((id) => next.delete(id));
+      } else {
+        filteredIds.forEach((id) => next.add(id));
+      }
+      return next;
+    });
+  };
+
+  const toggleSelectOne = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const clearSelection = () => setSelectedIds(new Set());
+
+  // 记录区域右键：有选中时显示操作菜单
+  const handleTableContextMenu = (e: React.MouseEvent) => {
+    if (selectedIds.size === 0) return;
+    e.preventDefault();
+    setContextMenuAt({ x: e.clientX, y: e.clientY });
+  };
+
+  // 关闭右键菜单（点击外部）
+  useEffect(() => {
+    if (!contextMenuAt) return;
+    const close = () => setContextMenuAt(null);
+    window.addEventListener("click", close);
+    return () => window.removeEventListener("click", close);
+  }, [contextMenuAt]);
+
+  // 批量指定：打开对话框（无权限时友好拦截）
+  const openBatchAssignDialog = () => {
+    setContextMenuAt(null);
+    if (!isAdmin) {
+      showAlert("仅管理员可批量指定负责人。", { type: "error", title: "无权限" });
+      return;
+    }
+    setBatchAssignError("");
+    setBatchAssignSupplement("");
+    setBatchAssignSalesPersonId("");
+    setBatchAssignOpen(true);
+  };
+
+  // 批量指定：提交（跟进说明 = 自动生成的默认说明 + 用户补充）
+  const handleBatchAssignSubmit = async () => {
+    if (!batchAssignSalesPersonId) {
+      setBatchAssignError("请选择销售人员");
+      return;
+    }
+    const selectedPerson = users.find((u) => u.id === batchAssignSalesPersonId);
+    const defaultLine = selectedPerson
+      ? `批量线索已分配给 ${selectedPerson.name}`
+      : "";
+    const followUpContent = batchAssignSupplement.trim()
+      ? `${defaultLine}\n${batchAssignSupplement.trim()}`
+      : defaultLine;
+
+    setBatchAssignError("");
+    setBatchAssignLoading(true);
+    try {
+      const result = await batchUpdateLeadSalesPersonWithFollowUpAction(
+        Array.from(selectedIds),
+        batchAssignSalesPersonId,
+        followUpContent
+      );
+      if (result?.error) {
+        setBatchAssignError(result.error);
+      } else {
+        setBatchAssignOpen(false);
+        clearSelection();
+        router.refresh();
+        const updated = result?.updatedCount ?? 0;
+        const skipped = result?.skippedCount ?? 0;
+        if (updated === 0) {
+          showAlert("所选线索均已由该负责人负责，未做变更。", { type: "success", title: "无需更新" });
+        } else {
+          const msg = skipped > 0
+            ? `已为 ${updated} 条指定负责人，${skipped} 条已是该负责人已跳过。`
+            : `已为 ${updated} 条指定负责人。`;
+          showAlert(
+            result?.salesPersonMap && Object.keys(result.salesPersonMap).length > 0
+              ? `${msg} 可发送邮件通知相关人员。`
+              : msg,
+            { type: "success", title: "已指定" }
+          );
+        }
+      }
+    } finally {
+      setBatchAssignLoading(false);
+    }
+  };
 
   // 更新 rows 时同步更新筛选结果
   useEffect(() => {
@@ -379,7 +514,7 @@ export function LeadsTableWithBulk({
     lead: Lead,
     field: string,
     displayValue: string,
-    options?: { align?: "left" | "center" }
+    options?: { align?: "left" | "center"; title?: string }
   ) => {
     if (!canEditLead(lead)) return <span className="text-left">{displayValue || "-"}</span>;
     const isEditing = editing?.leadId === lead.id && editing?.field === field;
@@ -449,7 +584,7 @@ export function LeadsTableWithBulk({
           alignLeft && "w-full justify-start",
           isSaving ? "cursor-wait opacity-60" : "cursor-pointer hover:bg-blue-50"
         )}
-        title={isSaving ? "保存中..." : "点击编辑"}
+        title={isSaving ? "保存中..." : (options?.title ?? "点击编辑")}
       >
         <span>{displayValue || <span className="text-muted-foreground">-</span>}</span>
         {isSaving && (
@@ -459,7 +594,7 @@ export function LeadsTableWithBulk({
     );
   };
 
-  /** 流转阶段：1=线索 2=商机 3=客户 */
+  /** 流转阶段：1=线索 2=商机 3=客户；仅展示当前阶段一个标签 */
   const getFlowStage = (lead: Lead): 1 | 2 | 3 => {
     if (!lead.opportunity) return 1;
     if (lead.opportunity.customer) return 3;
@@ -468,38 +603,38 @@ export function LeadsTableWithBulk({
 
   const LeadFlowBar = ({ lead }: { lead: Lead }) => {
     const stage = getFlowStage(lead);
-    const customerStatus = lead.opportunity?.customer?.status;
-    const isCustomerSigned = customerStatus === "已签约";
-    const steps: { key: 1 | 2 | 3; label: string; Icon: typeof UserRound }[] = [
-      { key: 1, label: "线索", Icon: UserRound },
-      { key: 2, label: "商机", Icon: Briefcase },
-      { key: 3, label: "客户", Icon: Building2 },
-    ];
+    const hasAssignee = !!lead.salesPersonId;
+    const config: { label: string; Icon: typeof UserRound; title: string; className: string } =
+      stage === 1
+        ? {
+          label: "线索",
+          Icon: UserRound,
+          title: hasAssignee ? "已指派，正在跟进" : "待分配负责人",
+          className: hasAssignee
+            ? "text-green-700 bg-green-50 ring-1 ring-green-200/60"
+            : "text-muted-foreground bg-muted/50",
+        }
+        : stage === 2
+          ? {
+            label: "商机",
+            Icon: Briefcase,
+            title: "已转为商机",
+            className: "text-primary font-medium bg-primary/10 ring-1 ring-primary/20",
+          }
+          : {
+            label: "客户",
+            Icon: Building2,
+            title: "已转为客户",
+            className: "text-green-700 bg-green-50 ring-1 ring-green-200/60",
+          };
     return (
-      <div className="flex items-center justify-center gap-1">
-        {steps.map(({ key, label, Icon }, i) => {
-          const isDone = stage > key || (key === 3 && stage === 3 && isCustomerSigned);
-          const isCurrent = stage === key && !(key === 3 && isCustomerSigned);
-          const isPending = stage < key;
-          return (
-            <span key={key} className="flex items-center gap-1">
-              <span
-                className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs whitespace-nowrap
-                  ${isDone ? "text-green-600 bg-green-50" : ""}
-                  ${isCurrent ? "text-primary font-semibold bg-primary/10 ring-1 ring-primary/30" : ""}
-                  ${isPending ? "text-muted-foreground/60" : ""}`}
-                title={isCurrent ? `当前在「${label}」` : isDone ? `已完成「${label}」` : `未到「${label}」`}
-              >
-                {isDone ? <Check className="h-3 w-3 shrink-0" /> : <Icon className="h-3 w-3 shrink-0" />}
-                <span>{label}</span>
-              </span>
-              {i < steps.length - 1 && (
-                <span className="text-muted-foreground/40 text-[10px]">→</span>
-              )}
-            </span>
-          );
-        })}
-      </div>
+      <span
+        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs whitespace-nowrap ${config.className}`}
+        title={config.title}
+      >
+        <config.Icon className="h-3.5 w-3.5 shrink-0" />
+        <span>{config.label}</span>
+      </span>
     );
   };
 
@@ -519,7 +654,7 @@ export function LeadsTableWithBulk({
             筛选
             {hasActiveFilters && (
               <Badge variant="info" className="ml-1.5 h-5 min-w-[20px] px-1.5 leading-none">
-                {conditions.length}
+                {activeFilterCount}
               </Badge>
             )}
           </Button>
@@ -545,15 +680,153 @@ export function LeadsTableWithBulk({
         onOpenChange={setFilterOpen}
         fields={filterFields}
         conditions={conditions}
+        groups={groups}
         onApply={applyFilter}
         onClear={clearFilter}
       />
 
-      <div className="space-y-3">
+      <div className="space-y-3" onContextMenu={handleTableContextMenu}>
+        {contextMenuAt && (
+          <div
+            className="fixed z-50 min-w-[140px] rounded-md border bg-popover py-1 shadow-md"
+            style={{ left: contextMenuAt.x, top: contextMenuAt.y }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              type="button"
+              className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent hover:text-accent-foreground"
+              onClick={openBatchAssignDialog}
+            >
+              <UserRound className="h-4 w-4" />
+              批量指定
+            </button>
+            <>
+              <div className="my-1 border-t border-border" />
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent hover:text-accent-foreground"
+                onClick={async () => {
+                  setContextMenuAt(null);
+                  const result = await batchSetLeadKeyFocusAction(Array.from(selectedIds), true);
+                  if (result && "error" in result) {
+                    showAlert(result.error ?? "操作失败", { type: "error", title: "操作失败" });
+                    return;
+                  }
+                  if (result && "success" in result) {
+                    setRows((prev) =>
+                      prev.map((r) =>
+                        selectedIds.has(r.id)
+                          ? { ...r, isKeyFocus: true, keyFocusByAdmin: isAdmin ? true : r.keyFocusByAdmin }
+                          : r
+                      )
+                    );
+                    showAlert(`已将为 ${result.count} 条线索标记为重点关注`, { type: "success", title: "已更新" });
+                    setSelectedIds(new Set());
+                  }
+                }}
+              >
+                <Star className="h-4 w-4" />
+                批量标记为重点关注
+              </button>
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent hover:text-accent-foreground"
+                onClick={async () => {
+                  setContextMenuAt(null);
+                  const result = await batchSetLeadKeyFocusAction(Array.from(selectedIds), false);
+                  if (result && "error" in result) {
+                    showAlert(result.error ?? "操作失败", { type: "error", title: "操作失败" });
+                    return;
+                  }
+                  if (result && "success" in result) {
+                    setRows((prev) =>
+                      prev.map((r) =>
+                        selectedIds.has(r.id)
+                          ? { ...r, isKeyFocus: false, keyFocusByAdmin: isAdmin ? false : r.keyFocusByAdmin }
+                          : r
+                      )
+                    );
+                    showAlert(`已取消 ${result.count} 条线索的重点关注`, { type: "success", title: "已更新" });
+                    setSelectedIds(new Set());
+                  }
+                }}
+              >
+                <Star className={cn("h-4 w-4", isAdmin ? "fill-blue-500 text-blue-500" : "fill-amber-400 text-amber-500")} />
+                批量取消重点关注
+              </button>
+            </>
+            {isAdmin && (
+              <>
+                <div className="my-1 border-t border-border" />
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-destructive hover:bg-accent hover:text-destructive focus:text-destructive"
+                  onClick={() => {
+                    setContextMenuAt(null);
+                    const count = selectedIds.size;
+                    showConfirm(
+                      {
+                        title: "确认批量删除",
+                        description: `确定要将选中的 ${count} 条线索移至回收站吗？删除后可在回收站中恢复。若线索已关联商机/客户，不会自动删除。`,
+                        confirmText: "确认删除",
+                        variant: "destructive",
+                      },
+                      async () => {
+                        const result = await batchSoftDeleteLeadsAction(Array.from(selectedIds));
+                        if (result && "error" in result) {
+                          showAlert(result.error ?? "删除失败", { type: "error", title: "操作失败" });
+                          return;
+                        }
+                        if (result && "success" in result) {
+                          setRows((prev) => prev.filter((r) => !selectedIds.has(r.id)));
+                          setSelectedIds(new Set());
+                          showAlert(`已将 ${result.count} 条线索移至回收站，可在回收站中恢复`, {
+                            type: "success",
+                            title: "已删除",
+                          });
+                        }
+                      }
+                    );
+                  }}
+                >
+                  <Trash2 className="h-4 w-4" />
+                  批量删除
+                </button>
+              </>
+            )}
+            <div className="my-1 border-t border-border" />
+            <button
+              type="button"
+              className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent hover:text-accent-foreground"
+              onClick={() => {
+                setContextMenuAt(null);
+                clearSelection();
+              }}
+            >
+              <X className="h-4 w-4" />
+              取消选择
+            </button>
+          </div>
+        )}
+
         <div className="rounded-lg border bg-card">
           <table className="w-full text-left text-sm">
             <thead className="border-b bg-muted/50">
               <tr>
+                <th className="w-10 px-4 py-3 text-center font-medium">
+                  {filteredData.length > 0 ? (
+                    <label className="flex cursor-pointer items-center justify-center gap-1.5">
+                      <input
+                        type="checkbox"
+                        checked={allFilteredSelected}
+                        onChange={toggleSelectAll}
+                        className="h-4 w-4 rounded border-input"
+                        title={allFilteredSelected ? "取消全选" : "全选当前页"}
+                      />
+                      <span className="sr-only">{allFilteredSelected ? "取消全选" : "全选当前页"}</span>
+                    </label>
+                  ) : null}
+                </th>
                 <th className="w-10 px-4 py-3 text-center font-medium"></th>
                 <th className="px-4 py-3 text-center font-medium">客户名称</th>
                 <th className="px-4 py-3 text-center font-medium">昵称</th>
@@ -574,7 +847,7 @@ export function LeadsTableWithBulk({
               {rows.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={12}
+                    colSpan={13}
                     className="px-4 py-8 text-center text-muted-foreground"
                   >
                     暂无数据，仅管理员可点击「新建线索」添加一条空记录后在表格内编辑
@@ -583,7 +856,7 @@ export function LeadsTableWithBulk({
               ) : filteredData.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={12}
+                    colSpan={13}
                     className="px-4 py-8 text-center text-muted-foreground"
                   >
                     没有符合筛选条件的数据
@@ -594,8 +867,19 @@ export function LeadsTableWithBulk({
                   <Fragment key={lead.id}>
                     <tr
                       id={`lead-row-${lead.id}`}
-                      className={`border-b last:border-0 hover:bg-muted/30 ${highlightId === lead.id ? "animate-highlight-row" : ""}`}
+                      className={`border-b last:border-0 hover:bg-muted/30 ${highlightId === lead.id ? "animate-highlight-row" : ""} ${selectedIds.has(lead.id) ? "bg-primary/5" : ""}`}
                     >
+                      <td className="px-4 py-3">
+                        <label className="flex cursor-pointer items-center justify-center">
+                          <input
+                            type="checkbox"
+                            checked={selectedIds.has(lead.id)}
+                            onChange={() => toggleSelectOne(lead.id)}
+                            className="h-4 w-4 rounded border-input"
+                            onClick={(e) => e.stopPropagation()}
+                          />
+                        </label>
+                      </td>
                       <td className="px-4 py-3">
                         <button
                           onClick={() => toggleExpandedLead(lead.id)}
@@ -608,7 +892,34 @@ export function LeadsTableWithBulk({
                           )}
                         </button>
                       </td>
-                      <td className="px-4 py-3">{renderLeadCell(lead, "customerName", lead.customerName)}</td>
+                      <td className="px-4 py-3">
+                        <div className="flex justify-center">
+                          <div className="relative inline-flex items-center">
+                            {lead.isKeyFocus && (
+                              <span
+                                className="absolute right-full mr-0.5 top-1/2 -translate-y-1/2"
+                                title={lead.keyFocusByAdmin ? "管理员标记为重点" : "重点关注"}
+                                aria-hidden
+                              >
+                                <Star
+                                  className={cn(
+                                    "h-4 w-4",
+                                    lead.keyFocusByAdmin ? "fill-blue-500 text-blue-500" : "fill-amber-400 text-amber-500"
+                                  )}
+                                />
+                              </span>
+                            )}
+                            {renderLeadCell(
+                              lead,
+                              "customerName",
+                              lead.customerName.length > MAX_CUSTOMER_NAME_DISPLAY
+                                ? `${lead.customerName.slice(0, MAX_CUSTOMER_NAME_DISPLAY)}...`
+                                : lead.customerName,
+                              { title: lead.customerName }
+                            )}
+                          </div>
+                        </div>
+                      </td>
                       <td className="px-4 py-3">{renderLeadCell(lead, "nickname", lead.nickname ?? "-")}</td>
                       <td className="px-4 py-3">{renderLeadCell(lead, "city", lead.city ?? "-")}</td>
                       <td className="px-4 py-3">{renderLeadCell(lead, "industry", lead.industry ?? "-")}</td>
@@ -623,12 +934,51 @@ export function LeadsTableWithBulk({
                           currentSalesPersonId={lead.salesPersonId}
                           users={users}
                           canAssign={isAdmin}
+                          onOptimisticUpdate={(newId) =>
+                            setRows((prev) =>
+                              prev.map((r) =>
+                                r.id === lead.id
+                                  ? {
+                                    ...r,
+                                    salesPersonId: newId ?? null,
+                                    salesPerson: newId ? users.find((u) => u.id === newId) ?? null : null,
+                                  }
+                                  : r
+                              )
+                            )
+                          }
+                          onRevert={(prevId) =>
+                            setRows((prev) =>
+                              prev.map((r) =>
+                                r.id === lead.id
+                                  ? {
+                                    ...r,
+                                    salesPersonId: prevId ?? null,
+                                    salesPerson: prevId ? users.find((u) => u.id === prevId) ?? null : null,
+                                  }
+                                  : r
+                              )
+                            )
+                          }
                         />
                       </td>
                       <td className="px-4 py-3">
                         <LeadStatusSelect
                           leadId={lead.id}
                           currentStatus={lead.status}
+                          onOptimisticUpdate={(newStatus) =>
+                            setRows((prev) =>
+                              prev.map((r) => (r.id === lead.id ? { ...r, status: newStatus } : r))
+                            )
+                          }
+                          onRevert={(prevStatus) =>
+                            setRows((prev) =>
+                              prev.map((r) => (r.id === lead.id ? { ...r, status: prevStatus } : r))
+                            )
+                          }
+                          onSuccess={(newStatus) => {
+                            if (newStatus === "有意向") router.refresh();
+                          }}
                         />
                       </td>
                       <td className="px-4 py-3">
@@ -652,6 +1002,39 @@ export function LeadsTableWithBulk({
                               </Button>
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end">
+                              {(isAdmin || (canEditLead(lead) && !lead.keyFocusByAdmin)) && (
+                                <DropdownMenuItem
+                                  onClick={async () => {
+                                    const result = await toggleLeadKeyFocusAction(lead.id);
+                                    if (result && "error" in result && result.error) {
+                                      showAlert(result.error ?? "操作失败", { type: "error", title: "操作失败" });
+                                      return;
+                                    }
+                                    if (result && "success" in result && result.success) {
+                                      setRows((prev) =>
+                                        prev.map((r) =>
+                                          r.id === lead.id
+                                            ? { ...r, isKeyFocus: result.isKeyFocus, keyFocusByAdmin: isAdmin ? result.isKeyFocus : r.keyFocusByAdmin }
+                                            : r
+                                        )
+                                      );
+                                      showAlert(
+                                        result.isKeyFocus ? "已标记为重点关注" : "已取消重点关注",
+                                        { type: "success", title: "已更新" }
+                                      );
+                                    }
+                                  }}
+                                >
+                                  <Star
+                                    className={cn(
+                                      "mr-2 h-4 w-4",
+                                      lead.keyFocusByAdmin && "fill-blue-500 text-blue-500",
+                                      lead.isKeyFocus && !lead.keyFocusByAdmin && "fill-amber-400 text-amber-500"
+                                    )}
+                                  />
+                                  {lead.isKeyFocus ? "取消重点关注" : "标记为重点关注"}
+                                </DropdownMenuItem>
+                              )}
                               <DropdownMenuItem onClick={() => setDetailLeadId(lead.id)}>
                                 <FileText className="mr-2 h-4 w-4" />
                                 查看记录
@@ -715,7 +1098,7 @@ export function LeadsTableWithBulk({
                     </tr>
                     {expandedLeadIds.has(lead.id) && (
                       <tr>
-                        <td colSpan={12} className="bg-gray-50 px-4 py-4 !text-left">
+                        <td colSpan={13} className="bg-gray-50 px-4 py-4 !text-left">
                           <div className="rounded-lg border border-gray-200 bg-white p-4 text-left">
                             <h4 className="mb-3 font-semibold text-gray-900 text-left">
                               跟进时间线
@@ -748,6 +1131,116 @@ export function LeadsTableWithBulk({
           />
         )}
 
+        {/* 批量指定负责人对话框 */}
+        <Dialog open={batchAssignOpen} onOpenChange={setBatchAssignOpen}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>批量指定负责人</DialogTitle>
+              <DialogDescription>
+                已选 {selectedIds.size} 条线索。选择销售人员后会自动生成一条默认跟进说明（随选择的人变化），您可在下方补充更多说明。
+              </DialogDescription>
+            </DialogHeader>
+            <div className="grid gap-4 py-2">
+              <div className="grid gap-2">
+                <Label htmlFor="bulk-sales-person">销售人员</Label>
+                <Select
+                  value={batchAssignSalesPersonId}
+                  onValueChange={setBatchAssignSalesPersonId}
+                >
+                  <SelectTrigger id="bulk-sales-person" className="w-full">
+                    <SelectValue placeholder="选择销售人员" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {users.map((u) => (
+                      <SelectItem key={u.id} value={u.id}>
+                        {u.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {batchAssignSalesPersonId && (() => {
+                  const selectedPerson = users.find((u) => u.id === batchAssignSalesPersonId);
+                  const alreadyAssignedCount = Array.from(selectedIds).filter(
+                    (id) => rows.find((r) => r.id === id)?.salesPersonId === batchAssignSalesPersonId
+                  ).length;
+                  const toUpdateCount = selectedIds.size - alreadyAssignedCount;
+                  if (alreadyAssignedCount === selectedIds.size) {
+                    return (
+                      <p className="text-sm text-muted-foreground">
+                        所选 {selectedIds.size} 条线索均已由 <strong>{selectedPerson?.name}</strong> 负责，提交后将不会变更。
+                      </p>
+                    );
+                  }
+                  if (alreadyAssignedCount > 0) {
+                    return (
+                      <p className="text-sm text-muted-foreground">
+                        所选 {selectedIds.size} 条中，{alreadyAssignedCount} 条已由 <strong>{selectedPerson?.name}</strong> 负责，提交后将只更新其余 {toUpdateCount} 条。
+                      </p>
+                    );
+                  }
+                  return null;
+                })()}
+              </div>
+              <div className="grid gap-2">
+                <div className="flex items-center justify-between gap-2">
+                  <Label className="text-muted-foreground">默认跟进说明</Label>
+                  <span className="text-xs text-muted-foreground">随所选销售人员自动更新</span>
+                </div>
+                <div
+                  className={cn(
+                    "rounded-md border px-3 py-2 text-sm",
+                    batchAssignSalesPersonId
+                      ? "border-input bg-muted/40 text-foreground"
+                      : "border-dashed bg-muted/20 text-muted-foreground"
+                  )}
+                  aria-live="polite"
+                >
+                  {batchAssignSalesPersonId ? (
+                    <>批量线索已分配给 {users.find((u) => u.id === batchAssignSalesPersonId)?.name ?? ""}</>
+                  ) : (
+                    "请先选择销售人员，将自动生成"
+                  )}
+                </div>
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="bulk-supplement">补充说明（选填）</Label>
+                <textarea
+                  id="bulk-supplement"
+                  value={batchAssignSupplement}
+                  onChange={(e) => setBatchAssignSupplement(e.target.value)}
+                  rows={3}
+                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                  placeholder="可在此补充更多说明，将接在默认说明下方"
+                />
+              </div>
+              {batchAssignError && (
+                <p className="text-sm text-destructive">{batchAssignError}</p>
+              )}
+            </div>
+            <DialogFooter className="gap-2 sm:gap-0">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setBatchAssignOpen(false)}
+                disabled={batchAssignLoading}
+              >
+                取消
+              </Button>
+              <Button
+                type="button"
+                onClick={handleBatchAssignSubmit}
+                disabled={batchAssignLoading}
+                className="gap-2"
+              >
+                {batchAssignLoading ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : null}
+                确定
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
         {/* 查看记录：右侧滑层展示完整字段并支持行内编辑 */}
         <Sheet open={!!detailLeadId} onOpenChange={(open) => !open && setDetailLeadId(null)}>
           <SheetContent side="right" className="flex flex-col overflow-hidden">
@@ -772,7 +1265,7 @@ export function LeadsTableWithBulk({
                   <SheetHeader className="shrink-0 border-b pb-3 text-left">
                     <SheetTitle>线索详情 · {lead.customerName}</SheetTitle>
                   </SheetHeader>
-                  <div className="mt-4 flex-1 overflow-y-auto space-y-4 text-left">
+                  <div className="mt-4 flex-1 overflow-y-auto space-y-4 text-left sheet-scroll">
                     {detailRows.map(({ key, label, editable }) => (
                       <div key={key} className="space-y-1.5 text-left">
                         <div className="text-xs font-medium text-muted-foreground">{label}</div>
@@ -789,10 +1282,52 @@ export function LeadsTableWithBulk({
                               currentSalesPersonId={lead.salesPersonId}
                               users={users}
                               canAssign={isAdmin}
+                              onOptimisticUpdate={(newId) =>
+                                setRows((prev) =>
+                                  prev.map((r) =>
+                                    r.id === lead.id
+                                      ? {
+                                        ...r,
+                                        salesPersonId: newId ?? null,
+                                        salesPerson: newId ? users.find((u) => u.id === newId) ?? null : null,
+                                      }
+                                      : r
+                                  )
+                                )
+                              }
+                              onRevert={(prevId) =>
+                                setRows((prev) =>
+                                  prev.map((r) =>
+                                    r.id === lead.id
+                                      ? {
+                                        ...r,
+                                        salesPersonId: prevId ?? null,
+                                        salesPerson: prevId ? users.find((u) => u.id === prevId) ?? null : null,
+                                      }
+                                      : r
+                                  )
+                                )
+                              }
                             />
                           )}
                           {key === "status" && (
-                            <LeadStatusSelect leadId={lead.id} currentStatus={lead.status} />
+                            <LeadStatusSelect
+                              leadId={lead.id}
+                              currentStatus={lead.status}
+                              onOptimisticUpdate={(newStatus) =>
+                                setRows((prev) =>
+                                  prev.map((r) => (r.id === lead.id ? { ...r, status: newStatus } : r))
+                                )
+                              }
+                              onRevert={(prevStatus) =>
+                                setRows((prev) =>
+                                  prev.map((r) => (r.id === lead.id ? { ...r, status: prevStatus } : r))
+                                )
+                              }
+                              onSuccess={(newStatus) => {
+                                if (newStatus === "有意向") router.refresh();
+                              }}
+                            />
                           )}
                           {editable && key !== "createdAt" && key !== "salesPersonId" && key !== "status" && (
                             renderLeadCell(lead, key, getLeadFieldValue(lead, key) || "-", { align: "left" })

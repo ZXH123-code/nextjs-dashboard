@@ -18,9 +18,18 @@ const STATUS_OPTIONS = ["未跟进", "跟进中", "有意向", "无意向"];
 export function LeadStatusSelect({
   leadId,
   currentStatus,
+  onOptimisticUpdate,
+  onRevert,
+  onSuccess,
 }: {
   leadId: string;
   currentStatus: string;
+  /** 乐观更新：先更新 UI，请求成功则保持 */
+  onOptimisticUpdate?: (newStatus: string) => void;
+  /** 请求失败时恢复为原值 */
+  onRevert?: (previousStatus: string) => void;
+  /** 请求成功后调用（如用于「有意向」时静默刷新以拉取新建商机） */
+  onSuccess?: (newStatus: string) => void;
 }) {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [selectedStatus, setSelectedStatus] = useState("");
@@ -34,6 +43,9 @@ export function LeadStatusSelect({
   };
 
   const handleConfirm = async (content: string) => {
+    const previousStatus = currentStatus;
+    onOptimisticUpdate?.(selectedStatus);
+    setIsDialogOpen(false);
     setIsSubmitting(true);
     try {
       const result = await updateLeadStatusWithFollowUpAction(
@@ -42,15 +54,15 @@ export function LeadStatusSelect({
         content
       );
       if (result?.error) {
+        onRevert?.(previousStatus);
         showAlert(result.error, { type: "error", title: "操作失败" });
       } else {
-        setIsDialogOpen(false);
-        // 刷新页面以显示最新数据
-        window.location.reload();
+        onSuccess?.(selectedStatus);
       }
     } catch (error) {
       console.error("更新状态失败:", error);
-      showAlert("更新状态失败", { type: "error", title: "操作失败" });
+      onRevert?.(previousStatus);
+      showAlert("更新状态失败，已恢复原状态", { type: "error", title: "操作失败" });
     } finally {
       setIsSubmitting(false);
     }

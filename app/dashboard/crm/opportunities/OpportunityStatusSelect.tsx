@@ -18,9 +18,13 @@ const STATUS_OPTIONS = ["初步沟通", "方案确认", "待签约", "已赢单"
 export function OpportunityStatusSelect({
   opportunityId,
   currentStatus,
+  onOptimisticUpdate,
+  onRevert,
 }: {
   opportunityId: string;
   currentStatus: string;
+  onOptimisticUpdate?: (newStatus: string) => void;
+  onRevert?: (previousStatus: string) => void;
 }) {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [selectedStatus, setSelectedStatus] = useState("");
@@ -34,6 +38,9 @@ export function OpportunityStatusSelect({
   };
 
   const handleConfirm = async (content: string) => {
+    const previousStatus = currentStatus;
+    onOptimisticUpdate?.(selectedStatus);
+    setIsDialogOpen(false);
     setIsSubmitting(true);
     try {
       const result = await updateOpportunityStatusWithFollowUpAction(
@@ -42,14 +49,13 @@ export function OpportunityStatusSelect({
         content
       );
       if (result?.error) {
+        onRevert?.(previousStatus);
         showAlert(result.error, { type: "error", title: "操作失败" });
-      } else {
-        setIsDialogOpen(false);
-        window.location.reload();
       }
     } catch (error) {
       console.error("更新状态失败:", error);
-      showAlert("更新状态失败", { type: "error", title: "操作失败" });
+      onRevert?.(previousStatus);
+      showAlert("更新状态失败，已恢复原状态", { type: "error", title: "操作失败" });
     } finally {
       setIsSubmitting(false);
     }

@@ -18,9 +18,13 @@ const STATUS_OPTIONS = ["预备签约", "已签约", "流失"];
 export function CustomerStatusSelect({
   customerId,
   currentStatus,
+  onOptimisticUpdate,
+  onRevert,
 }: {
   customerId: string;
   currentStatus: string;
+  onOptimisticUpdate?: (newStatus: string) => void;
+  onRevert?: (previousStatus: string) => void;
 }) {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [selectedStatus, setSelectedStatus] = useState("");
@@ -34,6 +38,9 @@ export function CustomerStatusSelect({
   };
 
   const handleConfirm = async (content: string) => {
+    const previousStatus = currentStatus;
+    onOptimisticUpdate?.(selectedStatus);
+    setIsDialogOpen(false);
     setIsSubmitting(true);
     try {
       const result = await updateCustomerStatusWithFollowUpAction(
@@ -42,14 +49,13 @@ export function CustomerStatusSelect({
         content
       );
       if (result?.error) {
+        onRevert?.(previousStatus);
         showAlert(result.error, { type: "error", title: "操作失败" });
-      } else {
-        setIsDialogOpen(false);
-        window.location.reload();
       }
     } catch (error) {
       console.error("更新状态失败:", error);
-      showAlert("更新状态失败", { type: "error", title: "操作失败" });
+      onRevert?.(previousStatus);
+      showAlert("更新状态失败，已恢复原状态", { type: "error", title: "操作失败" });
     } finally {
       setIsSubmitting(false);
     }

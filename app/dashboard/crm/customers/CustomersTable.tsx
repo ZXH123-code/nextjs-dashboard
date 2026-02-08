@@ -7,6 +7,7 @@ import { useAlert } from "@/hooks/use-alert";
 import { useFilter } from "@/hooks/use-filter";
 import { FilterDialog, type FilterField } from "@/components/ui/filter-dialog";
 import { CustomerStatusSelect } from "./CustomerStatusSelect";
+import { CustomerMaterialsSheet } from "./CustomerMaterialsSheet";
 import { FollowUpTimeline } from "../components/FollowUpTimeline";
 import { WriteFollowUpDialog } from "../components/WriteFollowUpDialog";
 import { createManualFollowUpAction, updateCustomerAction, syncLeadContactPhoneToOpportunityAction, syncContactPhoneToLeadAction } from "@/app/lib/crm-actions";
@@ -21,7 +22,19 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { ChevronDown, ChevronUp, MessageSquarePlus, Filter, X, Check, Briefcase, UserRound } from "lucide-react";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { ChevronDown, ChevronUp, MessageSquarePlus, Filter, X, Check, Briefcase, UserRound, Star, FileText, MoreHorizontal, ExternalLink, FolderOpen } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { CUSTOMER_STATUS } from "@/app/lib/crm-constants";
 
@@ -40,6 +53,8 @@ type Customer = {
   salesPerson: { id: string; name: string } | null;
   opportunity: { id: string; name: string; lead: { id: string; contactPhone: string | null } | null } | null;
   createdAt: Date;
+  isKeyFocus?: boolean;
+  keyFocusByAdmin?: boolean;
 };
 
 type EditingState = { customerId: string; field: string; value: string };
@@ -77,8 +92,12 @@ export function CustomersTable({
     syncToLead: boolean;
   } | null>(null);
   const [isSyncingContactPhone, setIsSyncingContactPhone] = useState(false);
+  /** 查看详细记录：右侧滑层展示的客户 id */
+  const [detailCustomerId, setDetailCustomerId] = useState<string | null>(null);
+  /** 上传/查看客户资料：抽屉展示的客户 id */
+  const [materialsCustomerId, setMaterialsCustomerId] = useState<string | null>(null);
 
-  // 定义筛选字段
+  // 定义筛选字段 - 包含客户表的所有有意义的字段
   const filterFields: FilterField[] = [
     { key: "name", label: "客户名称", type: "text" },
     { key: "nickname", label: "昵称", type: "text" },
@@ -87,11 +106,17 @@ export function CustomersTable({
     { key: "industry", label: "行业", type: "text" },
     { key: "status", label: "状态", type: "select", options: CUSTOMER_STATUS.map(s => ({ value: s, label: s })) },
     { key: "actualAmount", label: "实际成交金额", type: "number" },
+    { key: "contactPhone", label: "联系方式", type: "text" },
+    { key: "salesPerson.name", label: "销售人员", type: "text" },
+    { key: "opportunity.name", label: "来源商机", type: "text" },
+    { key: "isKeyFocus", label: "重点关注", type: "boolean" },
+    { key: "keyFocusByAdmin", label: "管理员标注", type: "boolean" },
     { key: "firstMaintenanceDate", label: "初次维护日期", type: "date" },
+    { key: "createdAt", label: "创建时间", type: "date" },
   ];
 
   // 使用筛选 Hook
-  const { filteredData, conditions, applyFilter, clearFilter, hasActiveFilters } = useFilter(rows, filterFields);
+  const { filteredData, conditions, groups, applyFilter, clearFilter, hasActiveFilters, activeFilterCount } = useFilter(rows, filterFields);
 
   // 更新 rows 时同步更新筛选结果
   useEffect(() => {
@@ -278,7 +303,8 @@ export function CustomersTable({
     customer: Customer,
     field: string,
     displayValue: string,
-    type: "text" | "date" | "number" = "text"
+    type: "text" | "date" | "number" = "text",
+    options?: { align?: "left" | "center" }
   ) => {
     if (!canEditCustomer(customer)) return <>{displayValue || "-"}</>;
     const isEditing = editing?.customerId === customer.id && editing?.field === field;
@@ -303,6 +329,7 @@ export function CustomersTable({
       );
     }
 
+    const alignLeft = options?.align === "left";
     return (
       <div
         onClick={() => {
@@ -315,7 +342,8 @@ export function CustomersTable({
           }
         }}
         className={cn(
-          "flex w-full items-center justify-center gap-1 rounded px-2 py-1",
+          "flex w-full items-center gap-1 rounded px-2 py-1",
+          alignLeft ? "justify-start text-left" : "justify-center",
           isSaving ? "cursor-wait opacity-60" : "cursor-pointer hover:bg-blue-50"
         )}
         title={isSaving ? "保存中..." : "点击编辑"}
@@ -347,7 +375,7 @@ export function CustomersTable({
             筛选
             {hasActiveFilters && (
               <Badge variant="info" className="ml-1.5 h-5 min-w-[20px] px-1.5 leading-none">
-                {conditions.length}
+                {activeFilterCount}
               </Badge>
             )}
           </Button>
@@ -373,6 +401,7 @@ export function CustomersTable({
         onOpenChange={setFilterOpen}
         fields={filterFields}
         conditions={conditions}
+        groups={groups}
         onApply={applyFilter}
         onClear={clearFilter}
       />
@@ -435,7 +464,25 @@ export function CustomersTable({
                       </button>
                     </td>
                     <td className="px-4 py-3">
-                      {renderCustomerCell(customer, "name", customer.name)}
+                      <div className="flex justify-center">
+                        <div className="relative inline-flex items-center">
+                          {customer.isKeyFocus && (
+                            <span
+                              className="absolute right-full mr-0.5 top-1/2 -translate-y-1/2"
+                              title={customer.keyFocusByAdmin ? "管理员标记为重点" : "重点关注"}
+                              aria-hidden
+                            >
+                              <Star
+                                className={cn(
+                                  "h-4 w-4",
+                                  customer.keyFocusByAdmin ? "fill-blue-500 text-blue-500" : "fill-amber-400 text-amber-500"
+                                )}
+                              />
+                            </span>
+                          )}
+                          {renderCustomerCell(customer, "name", customer.name)}
+                        </div>
+                      </div>
                     </td>
                     <td className="px-4 py-3">
                       {renderCustomerCell(customer, "nickname", customer.nickname ?? "-")}
@@ -483,6 +530,16 @@ export function CustomersTable({
                       <CustomerStatusSelect
                         customerId={customer.id}
                         currentStatus={customer.status}
+                        onOptimisticUpdate={(newStatus) =>
+                          setRows((prev) =>
+                            prev.map((r) => (r.id === customer.id ? { ...r, status: newStatus } : r))
+                          )
+                        }
+                        onRevert={(prevStatus) =>
+                          setRows((prev) =>
+                            prev.map((r) => (r.id === customer.id ? { ...r, status: prevStatus } : r))
+                          )
+                        }
                       />
                     </td>
                     <td className="px-4 py-3">
@@ -508,6 +565,23 @@ export function CustomersTable({
                           <MessageSquarePlus className="h-3.5 w-3.5" />
                           写跟进
                         </Button>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button size="sm" variant="ghost" className="h-7 w-7 p-0">
+                              <MoreHorizontal className="h-4 w-4" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem onClick={() => setDetailCustomerId(customer.id)}>
+                              <FileText className="mr-2 h-4 w-4" />
+                              查看详细记录
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => setMaterialsCustomerId(customer.id)}>
+                              <FolderOpen className="mr-2 h-4 w-4" />
+                              上传/下载客户资料
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
                       </div>
                     </td>
                   </tr>
@@ -533,6 +607,160 @@ export function CustomersTable({
           </tbody>
         </table>
       </div>
+
+      {/* 查看详细记录：右侧滑层 */}
+      <Sheet open={!!detailCustomerId} onOpenChange={(open) => !open && setDetailCustomerId(null)}>
+        <SheetContent side="right" className="flex flex-col overflow-hidden">
+          {(() => {
+            const customer = detailCustomerId ? rows.find((c) => c.id === detailCustomerId) : null;
+            if (!customer) return null;
+            return (
+              <>
+                <SheetHeader className="shrink-0 border-b pb-3 text-left">
+                  <SheetTitle>客户详情 · {customer.name}</SheetTitle>
+                </SheetHeader>
+                <div className="mt-4 flex-1 overflow-y-auto space-y-4 text-left sheet-scroll">
+                  <div className="space-y-1.5 text-left">
+                    <div className="text-xs font-medium text-muted-foreground">客户名称</div>
+                    {/* 输入框最大宽度：改此处的 max-w-sm 即可，如 max-w-md / max-w-lg */}
+                    <div className="min-h-[32px] flex items-center text-sm justify-start text-left w-full max-w-sm pl-1">
+                      {renderCustomerCell(customer, "name", customer.name, "text", { align: "left" })}
+                    </div>
+                  </div>
+                  <div className="space-y-1.5 text-left">
+                    <div className="text-xs font-medium text-muted-foreground">昵称</div>
+                    <div className="min-h-[32px] flex items-center text-sm justify-start text-left w-full max-w-sm pl-1">
+                      {renderCustomerCell(customer, "nickname", customer.nickname ?? "-", "text", { align: "left" })}
+                    </div>
+                  </div>
+                  <div className="space-y-1.5 text-left">
+                    <div className="text-xs font-medium text-muted-foreground">城市</div>
+                    <div className="min-h-[32px] flex items-center text-sm justify-start text-left w-full max-w-sm pl-1">
+                      {renderCustomerCell(customer, "city", customer.city ?? "-", "text", { align: "left" })}
+                    </div>
+                  </div>
+                  <div className="space-y-1.5 text-left">
+                    <div className="text-xs font-medium text-muted-foreground">客户分层</div>
+                    <div className="min-h-[32px] flex items-center text-sm justify-start text-left w-full max-w-sm pl-1">
+                      {renderCustomerCell(customer, "customerTier", customer.customerTier ?? "-", "text", { align: "left" })}
+                    </div>
+                  </div>
+                  <div className="space-y-1.5 text-left">
+                    <div className="text-xs font-medium text-muted-foreground">行业</div>
+                    <div className="min-h-[32px] flex items-center text-sm justify-start text-left w-full max-w-sm pl-1">
+                      {renderCustomerCell(customer, "industry", customer.industry ?? "-", "text", { align: "left" })}
+                    </div>
+                  </div>
+                  <div className="space-y-1.5 text-left">
+                    <div className="text-xs font-medium text-muted-foreground">联系方式</div>
+                    <div className="min-h-[32px] flex items-center text-sm justify-start text-left w-full max-w-sm pl-1">
+                      {renderCustomerCell(
+                        customer,
+                        "contactPhone",
+                        customer.contactPhone ?? customer.opportunity?.lead?.contactPhone ?? "-",
+                        "text",
+                        { align: "left" }
+                      )}
+                    </div>
+                  </div>
+                  <div className="space-y-1.5 text-left">
+                    <div className="text-xs font-medium text-muted-foreground">初次维护日期</div>
+                    <div className="min-h-[32px] flex items-center text-sm justify-start text-left w-full max-w-sm pl-1">
+                      {renderCustomerCell(
+                        customer,
+                        "firstMaintenanceDate",
+                        customer.firstMaintenanceDate
+                          ? customer.firstMaintenanceDate.toLocaleDateString("zh-CN")
+                          : "-",
+                        "date",
+                        { align: "left" }
+                      )}
+                    </div>
+                  </div>
+                  <div className="space-y-1.5 text-left">
+                    <div className="text-xs font-medium text-muted-foreground">实际成交金额</div>
+                    <div className="min-h-[32px] flex items-center text-sm justify-start text-left w-full max-w-sm pl-1">
+                      {renderCustomerCell(
+                        customer,
+                        "actualAmount",
+                        customer.actualAmount != null
+                          ? `¥${Number(customer.actualAmount).toLocaleString()}`
+                          : "-",
+                        "number",
+                        { align: "left" }
+                      )}
+                    </div>
+                  </div>
+                  <div className="space-y-1.5 text-left">
+                    <div className="text-xs font-medium text-muted-foreground">创建时间</div>
+                    <div className="min-h-[32px] flex items-center text-sm justify-start text-left w-full max-w-sm pl-1">
+                      <span className="text-muted-foreground">
+                        {customer.createdAt.toLocaleString("zh-CN")}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="space-y-1.5 text-left">
+                    <div className="text-xs font-medium text-muted-foreground">销售人员</div>
+                    <div className="min-h-[32px] flex items-center text-sm justify-start text-left w-full max-w-sm pl-1">
+                      <span>{customer.salesPerson?.name ?? "-"}</span>
+                    </div>
+                  </div>
+                  <div className="space-y-1.5 text-left">
+                    <div className="text-xs font-medium text-muted-foreground">状态</div>
+                    <div className="min-h-[32px] flex items-center text-sm justify-start text-left w-full max-w-sm pl-1">
+                      <CustomerStatusSelect
+                        customerId={customer.id}
+                        currentStatus={customer.status}
+                        onOptimisticUpdate={(newStatus) =>
+                          setRows((prev) =>
+                            prev.map((r) => (r.id === customer.id ? { ...r, status: newStatus } : r))
+                          )
+                        }
+                        onRevert={(prevStatus) =>
+                          setRows((prev) =>
+                            prev.map((r) => (r.id === customer.id ? { ...r, status: prevStatus } : r))
+                          )
+                        }
+                      />
+                    </div>
+                  </div>
+                  <div className="space-y-1.5 text-left">
+                    <div className="text-xs font-medium text-muted-foreground">来源商机</div>
+                    <div className="min-h-[32px] flex items-center text-sm justify-start text-left w-full max-w-sm pl-1">
+                      {customer.opportunity ? (
+                        <Link
+                          href={`/dashboard/crm/opportunities?highlight=${customer.opportunity.id}`}
+                          className="text-primary underline decoration-primary/50 hover:decoration-primary inline-flex items-center gap-1"
+                        >
+                          {customer.opportunity.name}
+                          <ExternalLink className="h-3.5 w-3.5" />
+                        </Link>
+                      ) : (
+                        <span className="text-muted-foreground">-</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </>
+            );
+          })()}
+        </SheetContent>
+      </Sheet>
+
+      {/* 上传/查看客户资料：右侧抽屉 */}
+      {(() => {
+        const customer = materialsCustomerId ? rows.find((c) => c.id === materialsCustomerId) : null;
+        if (!customer) return null;
+        return (
+          <CustomerMaterialsSheet
+            key={customer.id}
+            open={!!materialsCustomerId}
+            onOpenChange={(open) => !open && setMaterialsCustomerId(null)}
+            customerId={customer.id}
+            customerName={customer.name}
+          />
+        );
+      })()}
 
       {/* 写跟进对话框 */}
       {currentWriteFollowUpCustomer && (

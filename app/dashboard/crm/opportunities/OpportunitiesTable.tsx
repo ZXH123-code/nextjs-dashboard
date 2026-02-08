@@ -28,7 +28,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { ChevronDown, ChevronUp, MessageSquarePlus, User, ExternalLink, Filter, MoreHorizontal, X, Check, UserRound, Building2 } from "lucide-react";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
+import { ChevronDown, ChevronUp, MessageSquarePlus, User, ExternalLink, Filter, MoreHorizontal, X, Check, UserRound, Building2, Star, FileText } from "lucide-react";
 import { OPPORTUNITY_STATUS } from "@/app/lib/crm-constants";
 import { cn } from "@/lib/utils";
 
@@ -49,6 +55,8 @@ type Opportunity = {
   deliveryPerson: { id: string; name: string } | null;
   lead: { id: string; customerName: string; contactPhone: string | null } | null;
   customer: { id: string; name: string } | null;
+  isKeyFocus?: boolean;
+  keyFocusByAdmin?: boolean;
 };
 
 type User = { id: string; name: string };
@@ -90,21 +98,28 @@ export function OpportunitiesTable({
     syncToCustomer: boolean;
   } | null>(null);
   const [isSyncingContactPhone, setIsSyncingContactPhone] = useState(false);
+  /** 查看详细记录：右侧滑层展示的商机 id */
+  const [detailOppId, setDetailOppId] = useState<string | null>(null);
 
-  // 定义筛选字段
+  // 定义筛选字段 - 包含商机表的所有有意义的字段
   const filterFields: FilterField[] = [
     { key: "name", label: "商机名称", type: "text" },
     { key: "productType", label: "产品类型", type: "text" },
     { key: "status", label: "状态", type: "select", options: OPPORTUNITY_STATUS.map(s => ({ value: s, label: s })) },
     { key: "amount", label: "金额", type: "number" },
+    { key: "contactPhone", label: "联系方式", type: "text" },
     { key: "expectedCloseDate", label: "预计成交日期", type: "date" },
+    { key: "lostReason", label: "丢单原因", type: "text" },
     { key: "salesPerson.name", label: "销售人员", type: "text" },
     { key: "deliveryPerson.name", label: "交付人员", type: "text" },
+    { key: "lead.customerName", label: "来源线索", type: "text" },
+    { key: "isKeyFocus", label: "重点关注", type: "boolean" },
+    { key: "keyFocusByAdmin", label: "管理员标注", type: "boolean" },
     { key: "createdAt", label: "创建时间", type: "date" },
   ];
 
   // 使用筛选 Hook
-  const { filteredData, conditions, applyFilter, clearFilter, hasActiveFilters } = useFilter(rows, filterFields);
+  const { filteredData, conditions, groups, applyFilter, clearFilter, hasActiveFilters, activeFilterCount } = useFilter(rows, filterFields);
 
   // 更新 rows 时同步更新筛选结果
   useEffect(() => {
@@ -317,7 +332,8 @@ export function OpportunitiesTable({
     field: string,
     displayValue: string,
     type: "text" | "number" | "date" | "select" = "text",
-    selectOptions?: { value: string; label: string }[]
+    selectOptions?: { value: string; label: string }[],
+    options?: { align?: "left" | "center" }
   ) => {
     const isEditing = editing?.oppId === opp.id && editing?.field === field;
     const fieldKey = `${opp.id}:${field}`;
@@ -325,7 +341,7 @@ export function OpportunitiesTable({
 
     if (isEditing) {
       return (
-        <div className="flex items-center gap-1">
+        <div className="flex w-full items-center gap-1">
           {type === "select" && selectOptions ? (
             <select
               autoFocus
@@ -364,6 +380,7 @@ export function OpportunitiesTable({
       );
     }
 
+    const alignLeft = options?.align === "left";
     return (
       <div
         onClick={() => {
@@ -372,7 +389,8 @@ export function OpportunitiesTable({
           }
         }}
         className={cn(
-          "flex w-full items-center justify-center gap-1 rounded px-2 py-1",
+          "flex w-full items-center gap-1 rounded px-2 py-1",
+          alignLeft ? "justify-start text-left" : "justify-center",
           isSaving ? "cursor-wait opacity-60" : "cursor-pointer hover:bg-blue-50"
         )}
         title={isSaving ? "保存中..." : "点击编辑"}
@@ -411,7 +429,7 @@ export function OpportunitiesTable({
             筛选
             {hasActiveFilters && (
               <Badge variant="info" className="ml-1.5 h-5 min-w-[20px] px-1.5 leading-none">
-                {conditions.length}
+                {activeFilterCount}
               </Badge>
             )}
           </Button>
@@ -437,6 +455,7 @@ export function OpportunitiesTable({
         onOpenChange={setFilterOpen}
         fields={filterFields}
         conditions={conditions}
+        groups={groups}
         onApply={applyFilter}
         onClear={clearFilter}
       />
@@ -501,7 +520,25 @@ export function OpportunitiesTable({
                       </button>
                     </td>
                     <td className="px-4 py-3">
-                      {renderEditableCell(opp, "name", opp.name)}
+                      <div className="flex justify-center">
+                        <div className="relative inline-flex items-center">
+                          {opp.isKeyFocus && (
+                            <span
+                              className="absolute right-full mr-0.5 top-1/2 -translate-y-1/2"
+                              title={opp.keyFocusByAdmin ? "管理员标记为重点" : "重点关注"}
+                              aria-hidden
+                            >
+                              <Star
+                                className={cn(
+                                  "h-4 w-4",
+                                  opp.keyFocusByAdmin ? "fill-blue-500 text-blue-500" : "fill-amber-400 text-amber-500"
+                                )}
+                              />
+                            </span>
+                          )}
+                          {renderEditableCell(opp, "name", opp.name)}
+                        </div>
+                      </div>
                     </td>
                     <td className="px-4 py-3">
                       {renderEditableCell(opp, "productType", opp.productType ?? "-")}
@@ -543,6 +580,32 @@ export function OpportunitiesTable({
                         currentSalesPersonId={opp.salesPersonId}
                         users={users}
                         canAssign={isAdmin}
+                        onOptimisticUpdate={(newId) =>
+                          setRows((prev) =>
+                            prev.map((r) =>
+                              r.id === opp.id
+                                ? {
+                                  ...r,
+                                  salesPersonId: newId ?? null,
+                                  salesPerson: newId ? users.find((u) => u.id === newId) ?? null : null,
+                                }
+                                : r
+                            )
+                          )
+                        }
+                        onRevert={(prevId) =>
+                          setRows((prev) =>
+                            prev.map((r) =>
+                              r.id === opp.id
+                                ? {
+                                  ...r,
+                                  salesPersonId: prevId ?? null,
+                                  salesPerson: prevId ? users.find((u) => u.id === prevId) ?? null : null,
+                                }
+                                : r
+                            )
+                          )
+                        }
                       />
                     </td>
                     <td className="px-4 py-3">
@@ -558,6 +621,16 @@ export function OpportunitiesTable({
                       <OpportunityStatusSelect
                         opportunityId={opp.id}
                         currentStatus={opp.status}
+                        onOptimisticUpdate={(newStatus) =>
+                          setRows((prev) =>
+                            prev.map((r) => (r.id === opp.id ? { ...r, status: newStatus } : r))
+                          )
+                        }
+                        onRevert={(prevStatus) =>
+                          setRows((prev) =>
+                            prev.map((r) => (r.id === opp.id ? { ...r, status: prevStatus } : r))
+                          )
+                        }
                       />
                     </td>
                     <td className="px-4 py-3 text-center">
@@ -585,25 +658,29 @@ export function OpportunitiesTable({
                           <MessageSquarePlus className="h-3.5 w-3.5" />
                           写跟进
                         </Button>
-                        {opp.customer && (
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <Button size="sm" variant="ghost" className="h-7 w-7 p-0">
-                                <MoreHorizontal className="h-4 w-4" />
-                              </Button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end">
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button size="sm" variant="ghost" className="h-7 w-7 p-0">
+                              <MoreHorizontal className="h-4 w-4" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem onClick={() => setDetailOppId(opp.id)}>
+                              <FileText className="mr-2 h-4 w-4" />
+                              查看详细记录
+                            </DropdownMenuItem>
+                            {opp.customer && (
                               <DropdownMenuItem asChild>
                                 <Link
                                   href={`/dashboard/crm/customers?highlight=${opp.customer.id}`}
                                 >
-                                  <User />
+                                  <User className="mr-2 h-4 w-4" />
                                   查看客户
                                 </Link>
                               </DropdownMenuItem>
-                            </DropdownMenuContent>
-                          </DropdownMenu>
-                        )}
+                            )}
+                          </DropdownMenuContent>
+                        </DropdownMenu>
                       </div>
                     </td>
                   </tr>
@@ -629,6 +706,179 @@ export function OpportunitiesTable({
           </tbody>
         </table>
       </div>
+
+      {/* 查看详细记录：右侧滑层 */}
+      <Sheet open={!!detailOppId} onOpenChange={(open) => !open && setDetailOppId(null)}>
+        <SheetContent side="right" className="flex flex-col overflow-hidden">
+          {(() => {
+            const opp = detailOppId ? rows.find((o) => o.id === detailOppId) : null;
+            if (!opp) return null;
+            return (
+              <>
+                <SheetHeader className="shrink-0 border-b pb-3 text-left">
+                  <SheetTitle>商机详情 · {opp.name}</SheetTitle>
+                </SheetHeader>
+                <div className="mt-4 flex-1 overflow-y-auto space-y-4 text-left sheet-scroll">
+                  <div className="space-y-1.5 text-left">
+                    <div className="text-xs font-medium text-muted-foreground">商机名称</div>
+                    {/* 输入框最大宽度：改此处的 max-w-sm 即可，如 max-w-md / max-w-lg */}
+                    <div className="min-h-[32px] flex items-center text-sm justify-start text-left w-full max-w-sm pl-1">
+                      {renderEditableCell(opp, "name", opp.name, "text", undefined, { align: "left" })}
+                    </div>
+                  </div>
+                  <div className="space-y-1.5 text-left">
+                    <div className="text-xs font-medium text-muted-foreground">产品类型</div>
+                    <div className="min-h-[32px] flex items-center text-sm justify-start text-left w-full max-w-sm pl-1">
+                      {renderEditableCell(opp, "productType", opp.productType ?? "-", "text", undefined, { align: "left" })}
+                    </div>
+                  </div>
+                  <div className="space-y-1.5 text-left">
+                    <div className="text-xs font-medium text-muted-foreground">商机金额</div>
+                    <div className="min-h-[32px] flex items-center text-sm justify-start text-left w-full max-w-sm pl-1">
+                      {renderEditableCell(
+                        opp,
+                        "amount",
+                        opp.amount != null ? `¥${Number(opp.amount).toLocaleString()}` : "-",
+                        "number",
+                        undefined,
+                        { align: "left" }
+                      )}
+                    </div>
+                  </div>
+                  <div className="space-y-1.5 text-left">
+                    <div className="text-xs font-medium text-muted-foreground">联系方式</div>
+                    <div className="min-h-[32px] flex items-center text-sm justify-start text-left w-full max-w-sm pl-1">
+                      {renderEditableCell(
+                        opp,
+                        "contactPhone",
+                        opp.contactPhone ?? opp.lead?.contactPhone ?? "-",
+                        "text",
+                        undefined,
+                        { align: "left" }
+                      )}
+                    </div>
+                  </div>
+                  <div className="space-y-1.5 text-left">
+                    <div className="text-xs font-medium text-muted-foreground">创建时间</div>
+                    <div className="min-h-[32px] flex items-center text-sm justify-start text-left w-full max-w-sm pl-1">
+                      <span className="text-muted-foreground">
+                        {opp.createdAt.toLocaleString("zh-CN")}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="space-y-1.5 text-left">
+                    <div className="text-xs font-medium text-muted-foreground">预计赢单日期</div>
+                    <div className="min-h-[32px] flex items-center text-sm justify-start text-left w-full max-w-sm pl-1">
+                      {renderEditableCell(
+                        opp,
+                        "expectedCloseDate",
+                        opp.expectedCloseDate
+                          ? opp.expectedCloseDate.toLocaleDateString("zh-CN")
+                          : "-",
+                        "date",
+                        undefined,
+                        { align: "left" }
+                      )}
+                    </div>
+                  </div>
+                  <div className="space-y-1.5 text-left">
+                    <div className="text-xs font-medium text-muted-foreground">丢单原因</div>
+                    <div className="min-h-[32px] flex items-center text-sm justify-start text-left w-full max-w-sm pl-1">
+                      <span>{opp.lostReason ?? "-"}</span>
+                    </div>
+                  </div>
+                  <div className="space-y-1.5 text-left">
+                    <div className="text-xs font-medium text-muted-foreground">销售人员</div>
+                    <div className="min-h-[32px] flex items-center text-sm justify-start text-left w-full max-w-sm pl-1">
+                      <OpportunitySalesPersonSelect
+                        opportunityId={opp.id}
+                        opportunityName={opp.name}
+                        currentSalesPersonId={opp.salesPersonId}
+                        users={users}
+                        canAssign={isAdmin}
+                        onOptimisticUpdate={(newId) =>
+                          setRows((prev) =>
+                            prev.map((r) =>
+                              r.id === opp.id
+                                ? {
+                                  ...r,
+                                  salesPersonId: newId ?? null,
+                                  salesPerson: newId ? users.find((u) => u.id === newId) ?? null : null,
+                                }
+                                : r
+                            )
+                          )
+                        }
+                        onRevert={(prevId) =>
+                          setRows((prev) =>
+                            prev.map((r) =>
+                              r.id === opp.id
+                                ? {
+                                  ...r,
+                                  salesPersonId: prevId ?? null,
+                                  salesPerson: prevId ? users.find((u) => u.id === prevId) ?? null : null,
+                                }
+                                : r
+                            )
+                          )
+                        }
+                      />
+                    </div>
+                  </div>
+                  <div className="space-y-1.5 text-left">
+                    <div className="text-xs font-medium text-muted-foreground">交付负责人</div>
+                    <div className="min-h-[32px] flex items-center text-sm justify-start text-left w-full max-w-sm pl-1">
+                      {renderEditableCell(
+                        opp,
+                        "deliveryPersonId",
+                        opp.deliveryPerson?.name ?? "-",
+                        "select",
+                        userOptions,
+                        { align: "left" }
+                      )}
+                    </div>
+                  </div>
+                  <div className="space-y-1.5 text-left">
+                    <div className="text-xs font-medium text-muted-foreground">状态</div>
+                    <div className="min-h-[32px] flex items-center text-sm justify-start text-left w-full max-w-sm pl-1">
+                      <OpportunityStatusSelect
+                        opportunityId={opp.id}
+                        currentStatus={opp.status}
+                        onOptimisticUpdate={(newStatus) =>
+                          setRows((prev) =>
+                            prev.map((r) => (r.id === opp.id ? { ...r, status: newStatus } : r))
+                          )
+                        }
+                        onRevert={(prevStatus) =>
+                          setRows((prev) =>
+                            prev.map((r) => (r.id === opp.id ? { ...r, status: prevStatus } : r))
+                          )
+                        }
+                      />
+                    </div>
+                  </div>
+                  <div className="space-y-1.5 text-left">
+                    <div className="text-xs font-medium text-muted-foreground">来源线索</div>
+                    <div className="min-h-[32px] flex items-center text-sm justify-start text-left w-full max-w-sm pl-1">
+                      {opp.lead ? (
+                        <Link
+                          href={`/dashboard/crm/leads?highlight=${opp.lead.id}`}
+                          className="text-primary underline decoration-primary/50 hover:decoration-primary"
+                        >
+                          {opp.lead.customerName}
+                          <ExternalLink className="ml-1 inline h-3.5 w-3.5" />
+                        </Link>
+                      ) : (
+                        <span className="text-muted-foreground">-</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </>
+            );
+          })()}
+        </SheetContent>
+      </Sheet>
 
       {/* 写跟进对话框 */}
       {currentWriteFollowUpOpp && (

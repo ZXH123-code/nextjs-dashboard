@@ -24,6 +24,8 @@ import {
   updateLeadStatus,
   updateLeadSalesPerson,
   updateLeadSalesPersonBatch,
+  updateCustomerSalesPersonBatch,
+  deleteCustomers,
   deleteLead,
   updateOpportunity,
   updateOpportunityStatus,
@@ -31,10 +33,13 @@ import {
   updateFollowUp,
   deleteFollowUp,
   recordLeadAssignmentChange,
+  setLeadKeyFocus,
   recordLeadAssignmentChanges,
   getPendingNotifications,
   markNotificationsAsSent,
+  getNotificationsForUser,
   getCrmAuth,
+  globalSearchCrm,
 } from "./crm";
 import { sendLeadAssignmentNotification } from "./email";
 
@@ -166,6 +171,32 @@ export async function softDeleteLeadAction(formData: FormData) {
   return { success: true };
 }
 
+// 批量软删除线索（仅 admin）：选中线索移入回收站，可恢复
+export async function batchSoftDeleteLeadsAction(
+  leadIds: string[]
+): Promise<{ error?: string } | { success: true; count: number }> {
+  const session = await auth();
+  const role = (session?.user as { role?: string })?.role ?? "sales";
+  if (role !== "admin") return { error: "无权限" };
+  if (!leadIds?.length) return { error: "请选择至少一条线索" };
+
+  const { softDeleteLead } = await import("@/app/lib/crm");
+  let count = 0;
+  for (const leadId of leadIds) {
+    const lead = await prisma.crm_lead.findUnique({
+      where: { id: leadId, deletedAt: null },
+      select: { id: true },
+    });
+    if (lead) {
+      await softDeleteLead(leadId);
+      count += 1;
+    }
+  }
+  revalidatePath("/dashboard/crm/leads");
+  revalidatePath("/dashboard");
+  return { success: true, count };
+}
+
 // 恢复已删除的线索（仅 admin）
 export async function restoreLeadAction(formData: FormData) {
   const session = await auth();
@@ -181,6 +212,68 @@ export async function restoreLeadAction(formData: FormData) {
   revalidatePath("/dashboard/crm/leads");
   revalidatePath("/dashboard");
   return { success: true };
+}
+
+// 标记/取消线索为重点关注（admin 可操作全部，sales 仅可操作自己负责的线索），并同步到派生商机、客户
+export async function toggleLeadKeyFocusAction(leadId: string): Promise<{ error?: string } | { success: true; isKeyFocus: boolean }> {
+  const session = await auth();
+  const userId = (session?.user as { id?: string })?.id;
+  const role = (session?.user as { role?: string })?.role ?? "sales";
+  if (!userId) return { error: "未登录" };
+  if (!leadId) return { error: "缺少线索ID" };
+
+  const leadRow = await prisma.crm_lead.findUnique({
+    where: { id: leadId, deletedAt: null },
+  });
+  if (!leadRow) return { error: "线索不存在或已删除" };
+  const lead = leadRow as typeof leadRow & { isKeyFocus?: boolean; salesPersonId?: string | null };
+  const canEdit = role === "admin" || lead.salesPersonId === userId;
+  if (!canEdit) return { error: "无权限操作该线索" };
+
+  const next = !lead.isKeyFocus;
+  await setLeadKeyFocus(leadId, next, role === "admin");
+  revalidatePath("/dashboard/crm/leads");
+  revalidatePath("/dashboard/crm/opportunities");
+  revalidatePath("/dashboard/crm/customers");
+  revalidatePath("/dashboard");
+  return { success: true, isKeyFocus: next };
+}
+
+// 批量设置线索为重点关注/取消重点关注（admin 可操作全部，sales 仅可操作自己负责的线索），并同步到派生商机、客户
+export async function batchSetLeadKeyFocusAction(
+  leadIds: string[],
+  isKeyFocus: boolean
+): Promise<{ error?: string } | { success: true; count: number }> {
+  const session = await auth();
+  const userId = (session?.user as { id?: string })?.id;
+  const role = (session?.user as { role?: string })?.role ?? "sales";
+  if (!userId) return { error: "未登录" };
+  if (!leadIds?.length) return { error: "请选择至少一条线索" };
+
+  const where: { id: { in: string[] }; deletedAt: null; salesPersonId?: string; keyFocusByAdmin?: boolean } = {
+    id: { in: leadIds },
+    deletedAt: null,
+  };
+  if (role === "sales") {
+    where.salesPersonId = userId;
+    where.keyFocusByAdmin = false; // sales 只能批量操作非管理员标的线索
+  }
+
+  const allowed = await prisma.crm_lead.findMany({
+    where,
+    select: { id: true },
+  });
+  let count = 0;
+  const byAdmin = role === "admin";
+  for (const lead of allowed) {
+    await setLeadKeyFocus(lead.id, isKeyFocus, byAdmin);
+    count += 1;
+  }
+  revalidatePath("/dashboard/crm/leads");
+  revalidatePath("/dashboard/crm/opportunities");
+  revalidatePath("/dashboard/crm/customers");
+  revalidatePath("/dashboard");
+  return { success: true, count };
 }
 
 // 物理删除线索（仅 admin）：强制删除线索，并级联删除关联的商机与客户（谨慎使用）
@@ -545,6 +638,59 @@ export async function syncLeadContactPhoneToCustomerAction(
   return {};
 }
 
+/** 批量指定客户负责人（仅 admin 或当前为客户负责人可操作对应记录） */
+export async function batchUpdateCustomerSalesPersonAction(
+  customerIds: string[],
+  salesPersonId: string
+): Promise<{ error?: string } | null> {
+  const session = await auth();
+  const userId = (session?.user as { id?: string })?.id;
+  const role = (session?.user as { role?: string })?.role ?? "sales";
+  if (!userId) return { error: "未登录" };
+  if (!customerIds.length) return { error: "请选择要指定的客户" };
+
+  const customers = await prisma.crm_customer.findMany({
+    where: { id: { in: customerIds } },
+    select: { id: true, salesPersonId: true },
+  });
+  const allowedIds: string[] = [];
+  for (const c of customers) {
+    if (await checkCrmPermission(userId, role, c)) allowedIds.push(c.id);
+  }
+  if (allowedIds.length === 0) return { error: "无权限操作所选客户" };
+
+  await updateCustomerSalesPersonBatch(allowedIds, salesPersonId);
+  revalidatePath("/dashboard/crm/customers");
+  revalidatePath("/dashboard");
+  return {};
+}
+
+/** 批量删除客户（仅 admin 或当前为客户负责人可操作对应记录；跟进记录会保留但解除客户关联） */
+export async function batchDeleteCustomersAction(
+  customerIds: string[]
+): Promise<{ error?: string } | null> {
+  const session = await auth();
+  const userId = (session?.user as { id?: string })?.id;
+  const role = (session?.user as { role?: string })?.role ?? "sales";
+  if (!userId) return { error: "未登录" };
+  if (!customerIds.length) return { error: "请选择要删除的客户" };
+
+  const customers = await prisma.crm_customer.findMany({
+    where: { id: { in: customerIds } },
+    select: { id: true, salesPersonId: true },
+  });
+  const allowedIds: string[] = [];
+  for (const c of customers) {
+    if (await checkCrmPermission(userId, role, c)) allowedIds.push(c.id);
+  }
+  if (allowedIds.length === 0) return { error: "无权限操作所选客户" };
+
+  await deleteCustomers(allowedIds);
+  revalidatePath("/dashboard/crm/customers");
+  revalidatePath("/dashboard");
+  return {};
+}
+
 /** 仅同步商机联系方式（用于线索表改完联系方式后询问是否同步到商机表） */
 export async function syncLeadContactPhoneToOpportunityAction(
   opportunityId: string,
@@ -736,13 +882,15 @@ export async function updateLeadSalesPersonWithFollowUpAction(
   return { success: true };
 }
 
-/** 批量分配销售人员时创建跟进记录（更新版本） */
+/** 批量分配销售人员时创建跟进记录（更新版本）。仅对「负责人发生变化」的线索执行更新与跟进，已是该负责人的线索跳过。 */
 export async function batchUpdateLeadSalesPersonWithFollowUpAction(
   leadIds: string[],
   salesPersonId: string,
   followUpContent: string
 ): Promise<{
   error?: string;
+  updatedCount?: number;
+  skippedCount?: number;
   salesPersonMap?: Record<
     string,
     { name: string; email: string; leadIds: string[]; leadNames: string[] }
@@ -757,28 +905,44 @@ export async function batchUpdateLeadSalesPersonWithFollowUpAction(
 
   // 先查询原有的销售人员信息（只查询未删除的线索）
   const oldLeads = await prisma.crm_lead.findMany({
-    where: { 
+    where: {
       id: { in: leadIds },
-      deletedAt: null, // 只处理未删除的线索
+      deletedAt: null,
     },
     select: { id: true, customerName: true, salesPersonId: true },
   });
 
-  // 批量更新销售人员
-  await updateLeadSalesPersonBatch(leadIds, salesPersonId);
+  // 仅处理负责人发生变化的线索，已是该负责人的不更新、不写跟进、不记变更
+  const leadsToUpdate = oldLeads.filter((l) => l.salesPersonId !== salesPersonId);
+  const skippedCount = oldLeads.length - leadsToUpdate.length;
 
-  // 批量记录变更通知
-  const leadChanges = oldLeads.map((lead) => ({
+  if (leadsToUpdate.length === 0) {
+    revalidatePath("/dashboard/crm/leads");
+    revalidatePath("/dashboard");
+    return {
+      updatedCount: 0,
+      skippedCount,
+      salesPersonMap: {},
+    };
+  }
+
+  const idsToUpdate = leadsToUpdate.map((l) => l.id);
+
+  // 批量更新销售人员（仅需变更的）
+  await updateLeadSalesPersonBatch(idsToUpdate, salesPersonId);
+
+  // 仅对发生变更的线索记录通知
+  const leadChanges = leadsToUpdate.map((lead) => ({
     leadId: lead.id,
     oldSalesPersonId: lead.salesPersonId,
     newSalesPersonId: salesPersonId,
   }));
   await recordLeadAssignmentChanges(leadChanges, userId);
 
-  // 为每个线索创建跟进记录
+  // 仅对发生变更的线索创建跟进记录
   if (followUpContent.trim()) {
     await Promise.all(
-      leadIds.map((leadId) =>
+      idsToUpdate.map((leadId) =>
         createFollowUp({
           content: followUpContent.trim(),
           followUpById: salesPersonId,
@@ -790,43 +954,39 @@ export async function batchUpdateLeadSalesPersonWithFollowUpAction(
     );
   }
 
-  // 收集所有受影响的销售人员（新指定的 + 被替换的旧销售）
+  // 收集受影响的销售人员（新指定的 + 被替换的旧销售）
   const affectedSalesPersonIds = new Set<string>();
-  affectedSalesPersonIds.add(salesPersonId); // 新指定的销售
-
-  oldLeads.forEach((lead) => {
+  affectedSalesPersonIds.add(salesPersonId);
+  leadsToUpdate.forEach((lead) => {
     if (lead.salesPersonId && lead.salesPersonId !== salesPersonId) {
-      affectedSalesPersonIds.add(lead.salesPersonId); // 被替换的旧销售
+      affectedSalesPersonIds.add(lead.salesPersonId);
     }
   });
 
-  // 查询所有受影响销售人员的信息
   const salesPersons = await prisma.users.findMany({
     where: { id: { in: Array.from(affectedSalesPersonIds) } },
     select: { id: true, name: true, email: true },
   });
 
-  // 构建每个销售人员对应的线索列表
   const salesPersonMap: Record<
     string,
     { name: string; email: string; leadIds: string[]; leadNames: string[] }
   > = {};
 
-  // 为新指定的销售构建数据（显示所有新分配给他的线索）
+  // 新指定的销售：只包含本次新分配给他的线索（不含本就归他的）
   const newSalesPerson = salesPersons.find((sp) => sp.id === salesPersonId);
   if (newSalesPerson && newSalesPerson.email) {
     salesPersonMap[salesPersonId] = {
       name: newSalesPerson.name,
       email: newSalesPerson.email,
-      leadIds: oldLeads.map((l) => l.id),
-      leadNames: oldLeads.map((l) => l.customerName),
+      leadIds: leadsToUpdate.map((l) => l.id),
+      leadNames: leadsToUpdate.map((l) => l.customerName),
     };
   }
 
-  // 为被替换的旧销售构建数据（只显示从他那里被转走的线索）
   const oldSalesPersons = salesPersons.filter((sp) => sp.id !== salesPersonId);
   oldSalesPersons.forEach((sp) => {
-    const lostLeads = oldLeads.filter((lead) => lead.salesPersonId === sp.id);
+    const lostLeads = leadsToUpdate.filter((lead) => lead.salesPersonId === sp.id);
     if (lostLeads.length > 0 && sp.email) {
       salesPersonMap[sp.id] = {
         name: sp.name,
@@ -839,7 +999,11 @@ export async function batchUpdateLeadSalesPersonWithFollowUpAction(
 
   revalidatePath("/dashboard/crm/leads");
   revalidatePath("/dashboard");
-  return { salesPersonMap };
+  return {
+    salesPersonMap,
+    updatedCount: leadsToUpdate.length,
+    skippedCount,
+  };
 }
 
 /** 批量发送线索指定邮件通知 */
@@ -1099,83 +1263,83 @@ export async function deleteFollowUpAction(id: string) {
 
 // ============ 线索销售人员变更邮件通知 ============
 
-/** 获取待通知的销售人员列表（按人员分组） */
+type NotificationWithLead = Awaited<ReturnType<typeof getPendingNotifications>>[number];
+
+/**
+ * 按「净效果」聚合：同一线索多次转手（如 A→B→A）只算一次，仅按起始负责人与最终负责人统计。
+ * 避免循环指派时出现「被转走很多条、新接手很多条」的重复计数。
+ */
+function aggregateNotificationsByNetEffect(notifications: NotificationWithLead[]) {
+  const byLead = new Map<string, NotificationWithLead[]>();
+  for (const n of notifications) {
+    const leadId = n.leadId;
+    if (!byLead.has(leadId)) byLead.set(leadId, []);
+    byLead.get(leadId)!.push(n);
+  }
+
+  const netAssigned = new Map<string, Array<{ id: string; customerName: string }>>();
+  const netUnassigned = new Map<string, Array<{ id: string; customerName: string }>>();
+  const personInfo = new Map<string, { name: string; email: string }>();
+
+  for (const [, list] of byLead) {
+    const sorted = [...list].sort(
+      (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+    );
+    const start = sorted[0].oldSalesPersonId ?? null;
+    const end = sorted[sorted.length - 1].newSalesPersonId ?? null;
+    const leadInfo = { id: sorted[0].lead.id, customerName: sorted[0].lead.customerName };
+
+    if (end && start !== end) {
+      if (!netAssigned.has(end)) netAssigned.set(end, []);
+      netAssigned.get(end)!.push(leadInfo);
+      const p = sorted[sorted.length - 1].newSalesPerson;
+      if (p) personInfo.set(end, { name: p.name, email: p.email ?? "" });
+    }
+    if (start && start !== end) {
+      if (!netUnassigned.has(start)) netUnassigned.set(start, []);
+      netUnassigned.get(start)!.push(leadInfo);
+      const p = sorted[0].oldSalesPerson;
+      if (p) personInfo.set(start, { name: p.name, email: p.email ?? "" });
+    }
+  }
+
+  return { netAssigned, netUnassigned, personInfo };
+}
+
+/** 获取待通知的销售人员列表（按人员分组，按净效果统计） */
 export async function getPendingNotificationSummaryAction(): Promise<{
   salesPersons: Array<{
     id: string;
     name: string;
     email: string;
-    assignedCount: number; // 新接手的线索数
-    unassignedCount: number; // 被转走的线索数
+    assignedCount: number; // 新接手的线索数（净效果）
+    unassignedCount: number; // 被转走的线索数（净效果）
   }>;
 }> {
   const auth = await getCrmAuth();
   if (!auth) return { salesPersons: [] };
 
   const notifications = await getPendingNotifications(auth);
+  const { netAssigned, netUnassigned, personInfo } = aggregateNotificationsByNetEffect(notifications);
 
-  // 按销售人员分组统计
-  const groupedMap = new Map<
-    string,
-    {
-      id: string;
-      name: string;
-      email: string;
-      assignedLeads: Array<{ id: string; name: string }>;
-      unassignedLeads: Array<{ id: string; name: string }>;
-    }
-  >();
-
-  notifications.forEach((notif: typeof notifications[0]) => {
-    // 新接手的销售人员（newSalesPerson）
-    if (notif.newSalesPerson && notif.newSalesPersonId) {
-      if (!groupedMap.has(notif.newSalesPersonId)) {
-        groupedMap.set(notif.newSalesPersonId, {
-          id: notif.newSalesPersonId,
-          name: notif.newSalesPerson.name,
-          email: notif.newSalesPerson.email || "",
-          assignedLeads: [],
-          unassignedLeads: [],
-        });
-      }
-      groupedMap.get(notif.newSalesPersonId)!.assignedLeads.push({
-        id: notif.lead.id,
-        name: notif.lead.customerName,
-      });
-    }
-
-    // 被转走的销售人员（oldSalesPerson）
-    if (notif.oldSalesPerson && notif.oldSalesPersonId) {
-      if (!groupedMap.has(notif.oldSalesPersonId)) {
-        groupedMap.set(notif.oldSalesPersonId, {
-          id: notif.oldSalesPersonId,
-          name: notif.oldSalesPerson.name,
-          email: notif.oldSalesPerson.email || "",
-          assignedLeads: [],
-          unassignedLeads: [],
-        });
-      }
-      groupedMap.get(notif.oldSalesPersonId)!.unassignedLeads.push({
-        id: notif.lead.id,
-        name: notif.lead.customerName,
-      });
-    }
-  });
-
-  const salesPersons = Array.from(groupedMap.values())
-    .filter((sp) => sp.email) // 只包含有邮箱的
-    .map((sp) => ({
-      id: sp.id,
-      name: sp.name,
-      email: sp.email,
-      assignedCount: sp.assignedLeads.length,
-      unassignedCount: sp.unassignedLeads.length,
-    }));
+  const personIds = new Set([...netAssigned.keys(), ...netUnassigned.keys()]);
+  const salesPersons = Array.from(personIds)
+    .map((id) => {
+      const info = personInfo.get(id) ?? { name: "", email: "" };
+      return {
+        id,
+        name: info.name,
+        email: info.email,
+        assignedCount: netAssigned.get(id)?.length ?? 0,
+        unassignedCount: netUnassigned.get(id)?.length ?? 0,
+      };
+    })
+    .filter((sp) => sp.email);
 
   return { salesPersons };
 }
 
-/** 发送待通知邮件（给选中的销售人员） */
+/** 发送待通知邮件（给选中的销售人员；按净效果去重，循环转手只通知最终结果） */
 export async function sendPendingNotificationsAction(
   salesPersonIds: string[]
 ): Promise<{
@@ -1186,89 +1350,86 @@ export async function sendPendingNotificationsAction(
   if (!auth) return { success: [], failed: [] };
 
   const notifications = await getPendingNotifications(auth);
+  const { netAssigned, netUnassigned, personInfo } = aggregateNotificationsByNetEffect(notifications);
 
-  // 按销售人员分组
-  const groupedMap = new Map<
-    string,
-    {
-      name: string;
-      email: string;
-      assignedLeads: Array<{ id: string; customerName: string }>;
-      unassignedLeads: Array<{ id: string; customerName: string }>;
-      notificationIds: string[];
-    }
-  >();
-
-  notifications.forEach((notif: typeof notifications[0]) => {
-    // 新接手的
-    if (notif.newSalesPersonId && salesPersonIds.includes(notif.newSalesPersonId)) {
-      if (!groupedMap.has(notif.newSalesPersonId)) {
-        groupedMap.set(notif.newSalesPersonId, {
-          name: notif.newSalesPerson!.name,
-          email: notif.newSalesPerson!.email || "",
-          assignedLeads: [],
-          unassignedLeads: [],
-          notificationIds: [],
-        });
+  // 为每人收集其涉及的 notificationIds（用于发送后标记已读）
+  const notificationIdsByPerson = new Map<string, string[]>();
+  notifications.forEach((notif: NotificationWithLead) => {
+    for (const pid of [notif.oldSalesPersonId, notif.newSalesPersonId]) {
+      if (pid && salesPersonIds.includes(pid)) {
+        if (!notificationIdsByPerson.has(pid)) notificationIdsByPerson.set(pid, []);
+        notificationIdsByPerson.get(pid)!.push(notif.id);
       }
-      const group = groupedMap.get(notif.newSalesPersonId)!;
-      group.assignedLeads.push({
-        id: notif.lead.id,
-        customerName: notif.lead.customerName,
-      });
-      group.notificationIds.push(notif.id);
-    }
-
-    // 被转走的
-    if (notif.oldSalesPersonId && salesPersonIds.includes(notif.oldSalesPersonId)) {
-      if (!groupedMap.has(notif.oldSalesPersonId)) {
-        groupedMap.set(notif.oldSalesPersonId, {
-          name: notif.oldSalesPerson!.name,
-          email: notif.oldSalesPerson!.email || "",
-          assignedLeads: [],
-          unassignedLeads: [],
-          notificationIds: [],
-        });
-      }
-      const group = groupedMap.get(notif.oldSalesPersonId)!;
-      group.unassignedLeads.push({
-        id: notif.lead.id,
-        customerName: notif.lead.customerName,
-      });
-      group.notificationIds.push(notif.id);
     }
   });
 
   const success: string[] = [];
   const failed: Array<{ id: string; name: string; error: string }> = [];
+  const sentNotificationIds = new Set<string>();
 
-  // 逐个发送邮件
-  for (const [salesPersonId, group] of groupedMap.entries()) {
-    if (!group.email) {
-      failed.push({ id: salesPersonId, name: group.name, error: "邮箱为空" });
+  for (const salesPersonId of salesPersonIds) {
+    const assignedLeads = netAssigned.get(salesPersonId) ?? [];
+    const unassignedLeads = netUnassigned.get(salesPersonId) ?? [];
+    if (assignedLeads.length === 0 && unassignedLeads.length === 0) continue;
+
+    const info = personInfo.get(salesPersonId);
+    const name = info?.name ?? "";
+    const email = info?.email ?? "";
+    if (!email) {
+      failed.push({ id: salesPersonId, name, error: "邮箱为空" });
       continue;
     }
 
-    // 调用发送邮件（分别传递新接手和被转走的线索）
     const result = await sendLeadAssignmentNotification(
-      group.email,
-      group.name,
-      group.assignedLeads,
-      group.unassignedLeads
+      email,
+      name,
+      assignedLeads,
+      unassignedLeads
     );
 
     if (result.success) {
       success.push(salesPersonId);
-      // 标记为已发送
-      await markNotificationsAsSent(group.notificationIds);
+      for (const id of notificationIdsByPerson.get(salesPersonId) ?? []) {
+        sentNotificationIds.add(id);
+      }
     } else {
       failed.push({
         id: salesPersonId,
-        name: group.name,
+        name,
         error: result.error || "未知错误",
       });
     }
   }
 
+  // 本批所有通知统一标记为已发送，避免循环转手（净效果为 0）的记录一直留在待通知列表
+  const allIds = notifications.map((n) => n.id);
+  if (allIds.length > 0) await markNotificationsAsSent(allIds);
+
   return { success, failed };
+}
+
+/** 通知中心：获取当前用户相关的指派/转派简讯（供顶部栏展示） */
+export async function getNotificationsForCurrentUserAction() {
+  const auth = await getCrmAuth();
+  return getNotificationsForUser(auth, 50);
+}
+
+/** 通知中心：查看后标记当前用户的未读通知为已读（红点/数字消失） */
+export async function markMyNotificationsAsReadAction() {
+  const auth = await getCrmAuth();
+  if (!auth) return;
+  const list = await getPendingNotifications(auth);
+  const ids = list.map((n) => n.id);
+  if (ids.length > 0) await markNotificationsAsSent(ids);
+}
+
+/** 全局搜索：线索、商机、客户（分栏，每表单独分页，每页 5 条） */
+export async function globalSearchCrmAction(
+  keyword: string,
+  leadPage: number,
+  oppPage: number,
+  customerPage: number
+) {
+  const auth = await getCrmAuth();
+  return globalSearchCrm(auth, keyword, leadPage, oppPage, customerPage);
 }

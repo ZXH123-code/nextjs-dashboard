@@ -22,6 +22,7 @@
     "@radix-ui/react-slot": "^1.2.4",
     "@tailwindcss/forms": "^0.5.10",
     "@types/three": "^0.182.0",
+    "@vercel/blob": "^2.2.0",
     "autoprefixer": "10.4.20",
     "bcryptjs": "^2.4.3",
     "class-variance-authority": "^0.7.1",
@@ -39,7 +40,9 @@
     "typescript": "5.7.3",
     "use-debounce": "^10.0.4",
     "xlsx": "^0.18.5",
-    "zod": "^3.25.17"
+    "zod": "^3.25.17",
+    "pdf-lib": "^1.17.1",
+    "sharp": "^0.33.5"
   },
   "devDependencies": {
     "@tailwindcss/container-queries": "^0.1.1",

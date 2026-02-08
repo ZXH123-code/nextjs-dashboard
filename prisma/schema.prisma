@@ -25,6 +25,7 @@ model users {
   crm_lead_notifications_as_old  crm_lead_assignment_notification[] @relation("notification_old_sales")
   crm_lead_notifications_as_new  crm_lead_assignment_notification[] @relation("notification_new_sales")
   crm_lead_notifications_created crm_lead_assignment_notification[] @relation("notification_creator")
+  crm_customer_materials_uploaded crm_customer_material[]
 }
 
 // ============ CRM 四张表 ============
@@ -43,6 +44,8 @@ model crm_lead {
   customerTier  String?  @map("customer_tier") @db.VarChar(50)
   salesPersonId String?  @map("sales_person_id") @db.Uuid
   status        String   @default("未跟进") @db.VarChar(50) // 未跟进|跟进中|有意向|无意向
+  isKeyFocus      Boolean  @default(false) @map("is_key_focus") // 是否重点关注
+  keyFocusByAdmin Boolean  @default(false) @map("key_focus_by_admin") // true=管理员标的，蓝色展示且 sales 不可取消
 
   deletedAt DateTime? @map("deleted_at") @db.Timestamp(6) // 软删除时间，null 表示未删除
 
@@ -70,6 +73,8 @@ model crm_opportunity {
   salesPersonId     String?   @map("sales_person_id") @db.Uuid
   deliveryPersonId  String?   @map("delivery_person_id") @db.Uuid
   lostReason        String?   @map("lost_reason") @db.VarChar(500)
+  isKeyFocus        Boolean   @default(false) @map("is_key_focus") // 从线索继承
+  keyFocusByAdmin   Boolean   @default(false) @map("key_focus_by_admin") // 从线索继承，admin 标为蓝星
 
   lead           crm_lead?       @relation(fields: [leadId], references: [id])
   salesPerson    users?          @relation("opportunity_sales", fields: [salesPersonId], references: [id])
@@ -101,16 +106,38 @@ model crm_customer {
   actualAmount         Decimal?  @map("actual_amount") @db.Decimal(12, 2) // 实际成交金额（仅已签约客户需要）
   salesPersonId        String?   @map("sales_person_id") @db.Uuid
   createdAt            DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+  isKeyFocus            Boolean   @default(false) @map("is_key_focus") // 从商机/线索继承
+  keyFocusByAdmin        Boolean   @default(false) @map("key_focus_by_admin") // 从商机/线索继承，admin 标为蓝星
 
   opportunity crm_opportunity? @relation(fields: [opportunityId], references: [id])
   salesPerson users?           @relation(fields: [salesPersonId], references: [id])
   followUps   crm_follow_up[]
+  materials   crm_customer_material[]
 
   @@index([status])
   @@index([salesPersonId])
   @@index([opportunityId])
   @@index([createdAt])
   @@map("crm_customers")
+}
+
+/// 客户资料（Vercel Blob）：每个客户可上传多份文件，元数据存 DB，文件存 Blob
+model crm_customer_material {
+  id          String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  customerId  String   @map("customer_id") @db.Uuid
+  blobUrl     String   @map("blob_url") @db.VarChar(1024)   // Vercel Blob 返回的 url
+  pathname    String?  @map("pathname") @db.VarChar(512)   // Blob 存储路径，用于 del()
+  fileName    String   @map("file_name") @db.VarChar(255)
+  fileSize    Int      @map("file_size") @db.Integer
+  contentType String?  @map("content_type") @db.VarChar(128)
+  uploadedAt  DateTime @default(now()) @map("uploaded_at") @db.Timestamp(6)
+  uploadedById String? @map("uploaded_by_id") @db.Uuid
+
+  customer   crm_customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  uploadedBy users?       @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
+
+  @@index([customerId])
+  @@map("crm_customer_materials")
 }
 
 /// 跟进记录：关联线索、客户或商机

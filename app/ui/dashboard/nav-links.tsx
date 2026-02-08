@@ -3,6 +3,7 @@ import {
   LayoutDashboard,
   Users,
   Shield,
+  Trash2,
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -64,6 +65,7 @@ function getNavGroups(role: string): NavLinkGroup[] {
       header: "系统",
       links: [
         { name: "权限管理", href: "/dashboard/permissions", icon: Shield },
+        { name: "回收站", href: "/dashboard/crm/recycle-bin", icon: Trash2 },
       ],
     });
   }

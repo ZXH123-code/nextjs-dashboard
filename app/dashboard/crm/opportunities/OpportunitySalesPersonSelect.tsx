@@ -21,13 +21,16 @@ export function OpportunitySalesPersonSelect({
   currentSalesPersonId,
   users,
   canAssign = true,
+  onOptimisticUpdate,
+  onRevert,
 }: {
   opportunityId: string;
   opportunityName: string;
   currentSalesPersonId: string | null;
   users: User[];
-  /** 仅管理员可指定/变更销售人员 */
   canAssign?: boolean;
+  onOptimisticUpdate?: (newSalesPersonId: string | null) => void;
+  onRevert?: (previousSalesPersonId: string | null) => void;
 }) {
   const { showAlert, AlertComponent } = useAlert();
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -48,6 +51,9 @@ export function OpportunitySalesPersonSelect({
     const newSalesPersonId = newValue === EMPTY_VALUE ? "" : newValue;
     if (newSalesPersonId === (currentSalesPersonId ?? "")) return;
 
+    const previousId = currentSalesPersonId ?? null;
+    const newId = newSalesPersonId || null;
+    onOptimisticUpdate?.(newId);
     setIsSubmitting(true);
     try {
       const formData = new FormData();
@@ -58,14 +64,15 @@ export function OpportunitySalesPersonSelect({
 
       const result = await updateOpportunityAction(null, formData);
       if (result?.error) {
+        onRevert?.(previousId);
         showAlert(result.error, { type: "error", title: "更新失败" });
       } else {
         showAlert("销售人员已更新", { type: "success", title: "已保存" });
-        window.location.reload();
       }
     } catch (error) {
       console.error("更新商机销售人员失败:", error);
-      showAlert("更新失败，请重试", { type: "error", title: "更新失败" });
+      onRevert?.(previousId);
+      showAlert("更新失败，已恢复原负责人", { type: "error", title: "更新失败" });
     } finally {
       setIsSubmitting(false);
     }
