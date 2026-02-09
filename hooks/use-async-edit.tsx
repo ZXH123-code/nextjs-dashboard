@@ -114,8 +114,9 @@ export function useAsyncEdit<T extends { id: string }>() {
         }
 
         if (result?.error) {
-          setFailedFields((prev) => new Map(prev).set(fieldKey, result.error));
-          onError?.(result.error);
+          const errorMsg = result.error ?? "未知错误";
+          setFailedFields((prev) => new Map(prev).set(fieldKey, errorMsg));
+          onError?.(errorMsg);
         } else {
           // 保存成功，关闭编辑
           cancelEdit(recordId, field);
