@@ -12,7 +12,7 @@ import { Button } from "@/components/ui/button";
 import { AlertCircle, CheckCircle2, Info, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-type AlertType = "error" | "warning" | "info" | "success";
+export type AlertType = "error" | "warning" | "info" | "success";
 
 interface AlertDialogProps {
   open: boolean;
