@@ -28,6 +28,7 @@ import {
   globalSearchCrmAction,
 } from "@/app/lib/crm-actions";
 import type { GlobalSearchItem, GlobalSearchResult } from "@/app/lib/crm";
+import { AiQuerySheet } from "./ai-query-sheet";
 
 type NotificationItem = Awaited<ReturnType<typeof getNotificationsForCurrentUserAction>>[number];
 
@@ -110,6 +111,7 @@ export default function TopBar({ userName, userId }: { userName?: string; userId
   const [searchFocused, setSearchFocused] = useState(false);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [notificationOpen, setNotificationOpen] = useState(false);
+  const [aiSheetOpen, setAiSheetOpen] = useState(false);
 
   const [searchKeyword, setSearchKeyword] = useState("");
   const [searchLeadPage, setSearchLeadPage] = useState(0);
@@ -477,10 +479,11 @@ export default function TopBar({ userName, userId }: { userName?: string; userId
             <span>新建</span>
           </button>
 
-          {/* AI 助手 (小巧思) */}
+          {/* AI 助手 (问数) */}
           <button
             type="button"
             title="AI 智能助手"
+            onClick={() => setAiSheetOpen(true)}
             className={cn(
               "relative inline-flex h-9 w-9 items-center justify-center rounded-lg",
               "bg-gradient-to-br from-purple-500/10 to-pink-500/10",
@@ -598,6 +601,8 @@ export default function TopBar({ userName, userId }: { userName?: string; userId
 
       {/* 底部装饰性渐变线 */}
       <div className="h-px w-full bg-gradient-to-r from-transparent via-primary/20 to-transparent" />
+
+      <AiQuerySheet open={aiSheetOpen} onOpenChange={setAiSheetOpen} />
     </header>
   );
 }

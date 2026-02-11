@@ -1,21 +1,28 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/app/lib/prisma";
+import type { Prisma } from "@prisma/client";
 import * as XLSX from "xlsx";
 
 type LeadRow = {
-  客户名称?: string;
-  昵称?: string;
-  城市?: string;
-  详细地址?: string;
-  行业?: string;
-  线索来源?: string;
-  客户分层?: string;
-  销售人员邮箱?: string;
-  状态?: string;
+  客户名称?: unknown;
+  昵称?: unknown;
+  城市?: unknown;
+  详细地址?: unknown;
+  行业?: unknown;
+  线索来源?: unknown;
+  客户分层?: unknown;
+  销售人员邮箱?: unknown;
+  状态?: unknown;
+  /** 建议表头：联系人 */
+  联系人?: unknown;
+  /** 建议表头：联系人邮箱 */
+  联系人邮箱?: unknown;
+  /** 建议表头：备注 或 线索备注 */
+  备注?: unknown;
+  [key: string]: unknown;
 };
 
-const ALLOWED_STATUS = new Set(["未跟进", "跟进中", "有意向", "无意向"]);
 
 /** 将 Excel 解析出的任意类型转为字符串再 trim，避免数字等类型无 trim 报错 */
 function toStr(v: unknown): string {
@@ -30,13 +37,15 @@ type RowPreview = {
   data: {
     客户名称: string;
     昵称?: string;
+    联系人?: string;
     城市?: string;
     详细地址?: string;
     行业?: string;
     线索来源?: string;
     客户分层?: string;
-    销售人员邮箱?: string;
+    预览销售人员?: string;
     状态: string;
+    其他字段数?: number;
   };
 };
 
@@ -52,6 +61,8 @@ export async function POST(req: Request) {
   const mode = (formData.get("mode") as string | null) ?? "preview";
   const isPreviewOnly = mode === "preview";
   const file = formData.get("file");
+  /** 批量指定销售人员：导入时若提供，则所有线索均分配给该销售，覆盖 Excel 中的销售人员邮箱 */
+  const batchSalesPersonId = (formData.get("salesPersonId") as string) || null;
 
   if (!file || !(file instanceof File)) {
     return NextResponse.json({ error: "请上传 Excel 文件" }, { status: 400 });
@@ -82,36 +93,38 @@ export async function POST(req: Request) {
     const errors: { row: number; message: string }[] = [];
     const rowPreview: RowPreview[] = [];
 
-    // 预取所有涉及到的销售邮箱，避免每行查一次
-    const salesEmails: string[] = Array.from(
-      new Set(
-        rows
-          .map((r: LeadRow) => toStr(r.销售人员邮箱))
-          .filter((e: string) => e.length > 0)
-      )
-    );
+    // 若批量指定了销售人员，校验该用户存在，并记录名称用于预览展示
+    let resolvedBatchSalesId: string | null = null;
+    let resolvedBatchSalesName: string | null = null;
+    if (batchSalesPersonId && batchSalesPersonId.trim()) {
+      const u = await prisma.users.findUnique({
+        where: { id: batchSalesPersonId.trim() },
+        select: { id: true, name: true },
+      });
+      if (!u) {
+        return NextResponse.json(
+          { error: "指定的销售人员不存在，请重新选择" },
+          { status: 400 }
+        );
+      }
+      resolvedBatchSalesId = u.id;
+      resolvedBatchSalesName = u.name;
+    }
 
-    const users =
-      salesEmails.length > 0
-        ? await prisma.users.findMany({
-          where: { email: { in: salesEmails } },
-          select: { id: true, email: true },
-        })
-        : [];
+    const dataToInsert: Prisma.crm_leadCreateManyInput[] = [];
 
-    const emailToUserId = new Map(users.map((u) => [u.email, u.id]));
-
-    const dataToInsert: {
-      customerName: string;
-      nickname?: string;
-      city?: string;
-      address?: string;
-      industry?: string;
-      leadSource?: string;
-      customerTier?: string;
-      salesPersonId?: string;
-      status: string;
-    }[] = [];
+    const CANONICAL_HEADERS = new Set<string>([
+      "客户名称",
+      "昵称",
+      "城市",
+      "详细地址",
+      "行业",
+      "线索来源",
+      "客户分层",
+      "联系人",
+      "联系人邮箱",
+      "备注",
+    ]);
 
     rows.forEach((row: LeadRow, index: number) => {
       const rowNum = index + 1; // 记录序号，从1开始
@@ -126,80 +139,47 @@ export async function POST(req: Request) {
           data: {
             客户名称: customerName,
             昵称: toStr(row.昵称) || undefined,
+            联系人: toStr(row.联系人) || undefined,
             城市: toStr(row.城市) || undefined,
             详细地址: toStr(row.详细地址) || undefined,
             行业: toStr(row.行业) || undefined,
             线索来源: toStr(row.线索来源) || undefined,
             客户分层: toStr(row.客户分层) || undefined,
-            销售人员邮箱: toStr(row.销售人员邮箱) || undefined,
-            状态: toStr(row.状态) || "未跟进",
+            状态: "未跟进",
           },
         });
         return;
       }
 
-      let status = toStr(row.状态);
-      if (!status) status = "未跟进";
-      if (!ALLOWED_STATUS.has(status)) {
-        const message = `状态不合法：${status}，仅支持 未跟进/跟进中/有意向/无意向`;
-        errors.push({ row: rowNum, message });
-        rowPreview.push({
-          row: rowNum,
-          status: "error",
-          message,
-          data: {
-            客户名称: customerName,
-            昵称: toStr(row.昵称) || undefined,
-            城市: toStr(row.城市) || undefined,
-            详细地址: toStr(row.详细地址) || undefined,
-            行业: toStr(row.行业) || undefined,
-            线索来源: toStr(row.线索来源) || undefined,
-            客户分层: toStr(row.客户分层) || undefined,
-            销售人员邮箱: toStr(row.销售人员邮箱) || undefined,
-            状态: status,
-          },
-        });
-        return;
-      }
+      // 销售人员：当前版本仅支持「批量指定」，未指定时全部为未分配
+      const salesPersonId: string | null = resolvedBatchSalesId;
 
-      let salesPersonId: string | undefined = undefined;
-      const salesEmail = toStr(row.销售人员邮箱);
-      if (salesEmail) {
-        const uid = emailToUserId.get(salesEmail);
-        if (!uid) {
-          const message = `销售人员邮箱在系统中不存在：${salesEmail}`;
-          errors.push({ row: rowNum, message });
-          rowPreview.push({
-            row: rowNum,
-            status: "error",
-            message,
-            data: {
-              客户名称: customerName,
-              昵称: toStr(row.昵称) || undefined,
-              城市: toStr(row.城市) || undefined,
-              详细地址: toStr(row.详细地址) || undefined,
-              行业: toStr(row.行业) || undefined,
-              线索来源: toStr(row.线索来源) || undefined,
-              客户分层: toStr(row.客户分层) || undefined,
-              销售人员邮箱: salesEmail,
-              状态: status,
-            },
-          });
-          return;
+      // 组装扩展字段：所有非规范表头、且有值的列
+      const extraFields: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(row)) {
+        if (!CANONICAL_HEADERS.has(key)) {
+          const str = toStr(value);
+          if (str.length > 0) {
+            extraFields[key] = value;
+          }
         }
-        salesPersonId = uid;
       }
+      const extraCount = Object.keys(extraFields).length;
 
       dataToInsert.push({
         customerName,
         nickname: toStr(row.昵称) || undefined,
+        contactPerson: toStr(row.联系人) || undefined,
+        contactEmail: toStr(row.联系人邮箱) || undefined,
         city: toStr(row.城市) || undefined,
         address: toStr(row.详细地址) || undefined,
         industry: toStr(row.行业) || undefined,
         leadSource: toStr(row.线索来源) || undefined,
         customerTier: toStr(row.客户分层) || undefined,
-        salesPersonId,
-        status,
+        remark: toStr(row.备注) || undefined,
+        salesPersonId: salesPersonId || undefined,
+        status: "未跟进",
+        extraFields: extraCount > 0 ? (extraFields as Prisma.InputJsonValue) : undefined,
       });
 
       rowPreview.push({
@@ -208,13 +188,15 @@ export async function POST(req: Request) {
         data: {
           客户名称: customerName,
           昵称: toStr(row.昵称) || undefined,
+          联系人: toStr(row.联系人) || undefined,
           城市: toStr(row.城市) || undefined,
           详细地址: toStr(row.详细地址) || undefined,
           行业: toStr(row.行业) || undefined,
           线索来源: toStr(row.线索来源) || undefined,
           客户分层: toStr(row.客户分层) || undefined,
-          销售人员邮箱: toStr(row.销售人员邮箱) || undefined,
-          状态: status,
+          预览销售人员: resolvedBatchSalesName ?? "未指定",
+          状态: "未跟进",
+          其他字段数: extraCount || undefined,
         },
       });
     });

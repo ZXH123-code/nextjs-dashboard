@@ -72,6 +72,8 @@ type Lead = {
   id: string;
   customerName: string;
   nickname: string | null;
+  contactPerson?: string | null;
+  contactEmail?: string | null;
   address?: string | null;
   city: string | null;
   industry: string | null;
@@ -85,6 +87,9 @@ type Lead = {
   isClaimed?: boolean;
   isKeyFocus?: boolean;
   keyFocusByAdmin?: boolean;
+  remark?: string | null;
+  importSource?: string | null;
+  extraFields?: Record<string, unknown> | null;
   opportunity: {
     id: string;
     name: string;
@@ -150,6 +155,7 @@ export function LeadsTableWithBulk({
   // 定义筛选字段 - 包含线索表的所有有意义的字段
   const filterFields: FilterField[] = [
     { key: "customerName", label: "客户名称", type: "text" },
+    { key: "contactPerson", label: "联系人", type: "text" },
     { key: "nickname", label: "昵称", type: "text" },
     { key: "city", label: "城市", type: "text" },
     { key: "address", label: "地址", type: "text" },
@@ -157,7 +163,7 @@ export function LeadsTableWithBulk({
     { key: "leadSource", label: "线索来源", type: "text" },
     { key: "contactPhone", label: "联系方式", type: "text" },
     { key: "customerTier", label: "客户等级", type: "text" },
-    { key: "status", label: "状态", type: "select", options: LEAD_STATUS.map(s => ({ value: s, label: s })) },
+    { key: "status", label: "状态", type: "select", options: LEAD_STATUS.map((s) => ({ value: s, label: s })) },
     { key: "salesPerson.name", label: "销售人员", type: "text" },
     { key: "isKeyFocus", label: "重点关注", type: "boolean" },
     { key: "keyFocusByAdmin", label: "管理员标注", type: "boolean" },
@@ -300,13 +306,16 @@ export function LeadsTableWithBulk({
     setRows(leads);
   }, [leads]);
 
-  const handleWriteFollowUp = async (data: {
-    content: string;
-    contactPerson?: string;
-    summary?: string;
-    nextStep?: string;
-    customerNeeds?: string;
-  }) => {
+  const handleWriteFollowUp = async (
+    data: {
+      content: string;
+      contactPerson?: string;
+      summary?: string;
+      nextStep?: string;
+      customerNeeds?: string;
+    },
+    files?: File[]
+  ) => {
     if (!writeFollowUpLeadId) return;
 
     setIsSubmitting(true);
@@ -317,15 +326,31 @@ export function LeadsTableWithBulk({
       });
       if (result?.error) {
         showAlert(result.error, { type: "error", title: "操作失败" });
-      } else {
-        const leadIdJustSubmitted = writeFollowUpLeadId;
-        setWriteFollowUpLeadId(null);
-        setFollowUpRefreshKeys((prev) => ({
-          ...prev,
-          [leadIdJustSubmitted]: (prev[leadIdJustSubmitted] ?? 0) + 1,
-        }));
-        router.refresh();
+        return;
       }
+      const followUpId = (result as { followUpId?: string })?.followUpId;
+      if (followUpId && files?.length) {
+        for (const file of files) {
+          const formData = new FormData();
+          formData.set("file", file);
+          const res = await fetch(
+            `/api/crm/follow-ups/${followUpId}/images/upload`,
+            { method: "POST", body: formData }
+          );
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            showAlert(err.error ?? "上传图片失败", { type: "error", title: "操作失败" });
+            return;
+          }
+        }
+      }
+      const leadIdJustSubmitted = writeFollowUpLeadId;
+      setWriteFollowUpLeadId(null);
+      setFollowUpRefreshKeys((prev) => ({
+        ...prev,
+        [leadIdJustSubmitted]: (prev[leadIdJustSubmitted] ?? 0) + 1,
+      }));
+      router.refresh();
     } catch (error) {
       console.error("添加跟进记录失败:", error);
       showAlert("添加跟进记录失败", { type: "error", title: "操作失败" });
@@ -395,6 +420,7 @@ export function LeadsTableWithBulk({
   const getLeadFieldValue = (lead: Lead, field: string): string => {
     switch (field) {
       case "customerName": return lead.customerName;
+      case "contactPerson": return lead.contactPerson ?? "";
       case "nickname": return lead.nickname ?? "";
       case "address": return lead.address ?? "";
       case "city": return lead.city ?? "";
@@ -402,6 +428,8 @@ export function LeadsTableWithBulk({
       case "leadSource": return lead.leadSource ?? "";
       case "contactPhone": return lead.contactPhone ?? "";
       case "customerTier": return lead.customerTier ?? "";
+      case "contactEmail": return lead.contactEmail ?? "";
+      case "remark": return lead.remark ?? "";
       default: return "";
     }
   };
@@ -568,7 +596,7 @@ export function LeadsTableWithBulk({
     }
     const fieldKey = `${lead.id}:${field}`;
     const isSaving = savingFields.has(fieldKey);
-    const centerDisplayFields = ["customerName", "nickname", "address", "city", "industry", "contactPhone", "customerTier"];
+    const centerDisplayFields = ["customerName", "contactPerson", "address", "city", "industry", "contactPhone", "customerTier"];
     const alignLeft = options?.align === "left";
 
     return (
@@ -829,7 +857,7 @@ export function LeadsTableWithBulk({
                 </th>
                 <th className="w-10 px-4 py-3 text-center font-medium"></th>
                 <th className="px-4 py-3 text-center font-medium">客户名称</th>
-                <th className="px-4 py-3 text-center font-medium">昵称</th>
+                <th className="px-4 py-3 text-center font-medium">联系人</th>
                 <th className="px-4 py-3 text-center font-medium">城市</th>
                 <th className="px-4 py-3 text-center font-medium">行业</th>
                 <th className="px-4 py-3 text-center font-medium">线索来源</th>
@@ -920,7 +948,9 @@ export function LeadsTableWithBulk({
                           </div>
                         </div>
                       </td>
-                      <td className="px-4 py-3">{renderLeadCell(lead, "nickname", lead.nickname ?? "-")}</td>
+                      <td className="px-4 py-3">
+                        {renderLeadCell(lead, "contactPerson", lead.contactPerson || "-")}
+                      </td>
                       <td className="px-4 py-3">{renderLeadCell(lead, "city", lead.city ?? "-")}</td>
                       <td className="px-4 py-3">{renderLeadCell(lead, "industry", lead.industry ?? "-")}</td>
                       <td className="px-4 py-3">{renderLeadCell(lead, "leadSource", lead.leadSource ?? "-")}</td>
@@ -1106,6 +1136,7 @@ export function LeadsTableWithBulk({
                             <FollowUpTimeline
                               leadId={lead.id}
                               currentUserRole={currentUserRole}
+                              currentUserId={currentUserId}
                               refreshKey={followUpRefreshKeys[lead.id] ?? 0}
                             />
                           </div>
@@ -1250,12 +1281,15 @@ export function LeadsTableWithBulk({
               const detailRows: { key: string; label: string; editable: boolean }[] = [
                 { key: "customerName", label: "客户名称", editable: true },
                 { key: "nickname", label: "昵称", editable: true },
+                { key: "contactPerson", label: "联系人", editable: true },
+                { key: "contactPhone", label: "联系方式", editable: true },
+                { key: "contactEmail", label: "联系人邮箱", editable: true },
                 { key: "address", label: "地址", editable: true },
                 { key: "city", label: "城市", editable: true },
                 { key: "industry", label: "行业", editable: true },
                 { key: "leadSource", label: "线索来源", editable: true },
-                { key: "contactPhone", label: "联系方式", editable: true },
                 { key: "customerTier", label: "客户等级", editable: true },
+                { key: "remark", label: "线索备注", editable: true },
                 { key: "createdAt", label: "创建时间", editable: false },
                 { key: "salesPersonId", label: "销售人员", editable: true },
                 { key: "status", label: "状态", editable: true },

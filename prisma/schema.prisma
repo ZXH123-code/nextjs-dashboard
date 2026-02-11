@@ -16,15 +16,15 @@ model users {
   password String
   role     String? @default("sales") @db.VarChar(20) // admin=销售总管看全部, sales=销售人员只看自己的
 
-  crm_leads                      crm_lead[]
-  crm_opportunities              crm_opportunity[]                  @relation("opportunity_sales")
-  crm_opportunities_delivery     crm_opportunity[]                  @relation("opportunity_delivery")
-  crm_customers                  crm_customer[]
-  crm_follow_ups                 crm_follow_up[]                    @relation("follow_up_creator")
-  crm_follow_ups_updated         crm_follow_up[]                    @relation("follow_up_updater")
-  crm_lead_notifications_as_old  crm_lead_assignment_notification[] @relation("notification_old_sales")
-  crm_lead_notifications_as_new  crm_lead_assignment_notification[] @relation("notification_new_sales")
-  crm_lead_notifications_created crm_lead_assignment_notification[] @relation("notification_creator")
+  crm_leads                       crm_lead[]
+  crm_opportunities               crm_opportunity[]                  @relation("opportunity_sales")
+  crm_opportunities_delivery      crm_opportunity[]                  @relation("opportunity_delivery")
+  crm_customers                   crm_customer[]
+  crm_follow_ups                  crm_follow_up[]                    @relation("follow_up_creator")
+  crm_follow_ups_updated          crm_follow_up[]                    @relation("follow_up_updater")
+  crm_lead_notifications_as_old   crm_lead_assignment_notification[] @relation("notification_old_sales")
+  crm_lead_notifications_as_new   crm_lead_assignment_notification[] @relation("notification_new_sales")
+  crm_lead_notifications_created  crm_lead_assignment_notification[] @relation("notification_creator")
   crm_customer_materials_uploaded crm_customer_material[]
 }
 
@@ -32,20 +32,31 @@ model users {
 
 /// 线索管理：总池子来源，状态更新后可转入商机
 model crm_lead {
-  id            String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
-  customerName  String   @map("customer_name") @db.VarChar(255)
-  nickname      String?  @db.VarChar(100)
-  city          String?  @db.VarChar(100)
-  address       String?  @db.VarChar(500)
-  industry      String?  @db.VarChar(100)
-  leadSource    String?  @map("lead_source") @db.VarChar(100)
-  contactPhone  String?  @map("contact_phone") @db.VarChar(20) // 联系方式（手机号）
-  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamp(6)
-  customerTier  String?  @map("customer_tier") @db.VarChar(50)
-  salesPersonId String?  @map("sales_person_id") @db.Uuid
-  status        String   @default("未跟进") @db.VarChar(50) // 未跟进|跟进中|有意向|无意向
-  isKeyFocus      Boolean  @default(false) @map("is_key_focus") // 是否重点关注
+  id             String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  customerName   String   @map("customer_name") @db.VarChar(255)
+  nickname       String?  @db.VarChar(100)
+  /// 主要联系人姓名（如“张三”、“李总”），用于和客户名称区分
+  contactPerson  String?  @map("contact_person") @db.VarChar(100)
+  /// 主要联系人邮箱
+  contactEmail   String?  @map("contact_email") @db.VarChar(255)
+  city           String?  @db.VarChar(100)
+  address        String?  @db.VarChar(500)
+  industry       String?  @db.VarChar(100)
+  leadSource     String?  @map("lead_source") @db.VarChar(100)
+  /// 主要联系方式（手机号）
+  contactPhone   String?  @map("contact_phone") @db.VarChar(20)
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+  customerTier   String?  @map("customer_tier") @db.VarChar(50)
+  /// 线索备注 / 需求简要描述
+  remark         String?  @db.VarChar(500)
+  salesPersonId  String?  @map("sales_person_id") @db.Uuid
+  status         String   @default("未跟进") @db.VarChar(50) // 未跟进|跟进中|有意向|无意向
+  isKeyFocus     Boolean  @default(false) @map("is_key_focus") // 是否重点关注
   keyFocusByAdmin Boolean  @default(false) @map("key_focus_by_admin") // true=管理员标的，蓝色展示且 sales 不可取消
+  /// 导入来源（可存文件名/渠道名，如“百度推广-2025Q1”）
+  importSource   String?  @map("import_source") @db.VarChar(100)
+  /// 其他扩展字段，存放 Excel 中未映射到规范字段的所有列
+  extraFields    Json?    @map("extra_fields")
 
   deletedAt DateTime? @map("deleted_at") @db.Timestamp(6) // 软删除时间，null 表示未删除
 
@@ -106,11 +117,11 @@ model crm_customer {
   actualAmount         Decimal?  @map("actual_amount") @db.Decimal(12, 2) // 实际成交金额（仅已签约客户需要）
   salesPersonId        String?   @map("sales_person_id") @db.Uuid
   createdAt            DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
-  isKeyFocus            Boolean   @default(false) @map("is_key_focus") // 从商机/线索继承
-  keyFocusByAdmin        Boolean   @default(false) @map("key_focus_by_admin") // 从商机/线索继承，admin 标为蓝星
+  isKeyFocus           Boolean   @default(false) @map("is_key_focus") // 从商机/线索继承
+  keyFocusByAdmin      Boolean   @default(false) @map("key_focus_by_admin") // 从商机/线索继承，admin 标为蓝星
 
-  opportunity crm_opportunity? @relation(fields: [opportunityId], references: [id])
-  salesPerson users?           @relation(fields: [salesPersonId], references: [id])
+  opportunity crm_opportunity?        @relation(fields: [opportunityId], references: [id])
+  salesPerson users?                  @relation(fields: [salesPersonId], references: [id])
   followUps   crm_follow_up[]
   materials   crm_customer_material[]
 
@@ -123,15 +134,15 @@ model crm_customer {
 
 /// 客户资料（Vercel Blob）：每个客户可上传多份文件，元数据存 DB，文件存 Blob
 model crm_customer_material {
-  id          String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
-  customerId  String   @map("customer_id") @db.Uuid
-  blobUrl     String   @map("blob_url") @db.VarChar(1024)   // Vercel Blob 返回的 url
-  pathname    String?  @map("pathname") @db.VarChar(512)   // Blob 存储路径，用于 del()
-  fileName    String   @map("file_name") @db.VarChar(255)
-  fileSize    Int      @map("file_size") @db.Integer
-  contentType String?  @map("content_type") @db.VarChar(128)
-  uploadedAt  DateTime @default(now()) @map("uploaded_at") @db.Timestamp(6)
-  uploadedById String? @map("uploaded_by_id") @db.Uuid
+  id           String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  customerId   String   @map("customer_id") @db.Uuid
+  blobUrl      String   @map("blob_url") @db.VarChar(1024) // Vercel Blob 返回的 url
+  pathname     String?  @map("pathname") @db.VarChar(512) // Blob 存储路径，用于 del()
+  fileName     String   @map("file_name") @db.VarChar(255)
+  fileSize     Int      @map("file_size") @db.Integer
+  contentType  String?  @map("content_type") @db.VarChar(128)
+  uploadedAt   DateTime @default(now()) @map("uploaded_at") @db.Timestamp(6)
+  uploadedById String?  @map("uploaded_by_id") @db.Uuid
 
   customer   crm_customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
   uploadedBy users?       @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
@@ -160,12 +171,15 @@ model crm_follow_up {
   updatedAt         DateTime? @map("updated_at") @db.Timestamp(6)
   updatedById       String?   @map("updated_by_id") @db.Uuid
   isSystemGenerated Boolean   @default(false) @map("is_system_generated") // 是否为系统自动生成（状态变更时）
+  /// 流转类型：删除该条跟进时若存在则联动撤回业务数据。lead_to_opportunity=撤回线索转商机；opportunity_to_customer=撤回商机转客户
+  transitionType    String?   @map("transition_type") @db.VarChar(32)
 
-  followUpBy  users            @relation("follow_up_creator", fields: [followUpById], references: [id])
-  updatedBy   users?           @relation("follow_up_updater", fields: [updatedById], references: [id])
-  lead        crm_lead?        @relation(fields: [leadId], references: [id])
-  customer    crm_customer?    @relation(fields: [customerId], references: [id])
-  opportunity crm_opportunity? @relation(fields: [opportunityId], references: [id])
+  followUpBy  users                 @relation("follow_up_creator", fields: [followUpById], references: [id])
+  updatedBy   users?                @relation("follow_up_updater", fields: [updatedById], references: [id])
+  lead        crm_lead?             @relation(fields: [leadId], references: [id])
+  customer    crm_customer?         @relation(fields: [customerId], references: [id])
+  opportunity crm_opportunity?      @relation(fields: [opportunityId], references: [id])
+  images      crm_follow_up_image[]
 
   @@index([leadId])
   @@index([customerId])
@@ -173,6 +187,23 @@ model crm_follow_up {
   @@index([followDate])
   @@index([createdAt])
   @@map("crm_follow_ups")
+}
+
+/// 跟进记录图片（Vercel Blob）：每条跟进可有多张图片，按需加载
+model crm_follow_up_image {
+  id          String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  followUpId  String   @map("follow_up_id") @db.Uuid
+  blobUrl     String   @map("blob_url") @db.VarChar(1024)
+  pathname    String?  @map("pathname") @db.VarChar(512)
+  fileName    String   @map("file_name") @db.VarChar(255)
+  fileSize    Int      @map("file_size") @db.Integer
+  contentType String?  @map("content_type") @db.VarChar(128)
+  uploadedAt  DateTime @default(now()) @map("uploaded_at") @db.Timestamp(6)
+
+  followUp crm_follow_up @relation(fields: [followUpId], references: [id], onDelete: Cascade)
+
+  @@index([followUpId])
+  @@map("crm_follow_up_images")
 }
 
 /// 线索销售人员变更通知：记录每次销售人员变更，用于发送邮件通知

@@ -39,6 +39,7 @@ import {
   markNotificationsAsSent,
   getNotificationsForUser,
   getCrmAuth,
+  getFollowUpByIdIfVisible,
   globalSearchCrm,
 } from "./crm";
 import { sendLeadAssignmentNotification } from "./email";
@@ -52,11 +53,15 @@ export async function createLeadAction(formData: FormData) {
   await createLead({
     customerName: customerName.trim(),
     nickname: (formData.get("nickname") as string) || undefined,
+    contactPerson: (formData.get("contactPerson") as string) || undefined,
+    contactEmail: (formData.get("contactEmail") as string) || undefined,
     city: (formData.get("city") as string) || undefined,
     address: (formData.get("address") as string) || undefined,
     industry: (formData.get("industry") as string) || undefined,
     leadSource: (formData.get("leadSource") as string) || undefined,
     customerTier: (formData.get("customerTier") as string) || undefined,
+    contactPhone: (formData.get("contactPhone") as string) || undefined,
+    remark: (formData.get("remark") as string) || undefined,
     status: (formData.get("status") as string) || "未跟进",
     salesPersonId,
   });
@@ -86,9 +91,9 @@ export async function updateLeadStatusAction(leadId: string, status: string) {
   const userId = (session?.user as { id?: string })?.id;
   const role = (session?.user as { role?: string })?.role ?? "sales";
   if (!userId) return;
-  const lead = await prisma.crm_lead.findUnique({ 
+  const lead = await prisma.crm_lead.findUnique({
     where: { id: leadId, deletedAt: null }, // 已删除的线索不能更新状态
-    select: { salesPersonId: true } 
+    select: { salesPersonId: true }
   });
   if (!lead) return; // 线索不存在或已删除
   if (!(await checkCrmPermission(userId, role, lead))) return; // 无权限静默跳过
@@ -138,12 +143,15 @@ export async function updateLeadAction(
   await updateLead(leadId, {
     customerName,
     nickname: (formData.get("nickname") as string) || undefined,
+    contactPerson: (formData.get("contactPerson") as string) || undefined,
+    contactEmail: (formData.get("contactEmail") as string) || undefined,
     city: (formData.get("city") as string) || undefined,
     address: (formData.get("address") as string) || undefined,
     industry: (formData.get("industry") as string) || undefined,
     leadSource: (formData.get("leadSource") as string) || undefined,
     customerTier: (formData.get("customerTier") as string) || undefined,
     contactPhone: (formData.get("contactPhone") as string) || undefined,
+    remark: (formData.get("remark") as string) || undefined,
     salesPersonId,
     status: (formData.get("status") as string) || undefined,
   });
@@ -165,7 +173,7 @@ export async function softDeleteLeadAction(formData: FormData) {
 
   const { softDeleteLead } = await import("@/app/lib/crm");
   await softDeleteLead(leadId);
-  
+
   revalidatePath("/dashboard/crm/leads");
   revalidatePath("/dashboard");
   return { success: true };
@@ -208,7 +216,7 @@ export async function restoreLeadAction(formData: FormData) {
 
   const { restoreLead } = await import("@/app/lib/crm");
   await restoreLead(leadId);
-  
+
   revalidatePath("/dashboard/crm/leads");
   revalidatePath("/dashboard");
   return { success: true };
@@ -330,10 +338,10 @@ export async function cleanupOldDeletedLeadsAction(
   }
 
   revalidatePath("/dashboard/permissions");
-  return { 
-    success: true, 
-    count: deletedLeads.length, 
-    message: `已清理 ${deletedLeads.length} 条超过 ${daysOld} 天的已删除记录` 
+  return {
+    success: true,
+    count: deletedLeads.length,
+    message: `已清理 ${deletedLeads.length} 条超过 ${daysOld} 天的已删除记录`
   };
 }
 
@@ -346,9 +354,9 @@ export async function updateLeadSalesPersonFormAction(formData: FormData) {
   const userId = (session?.user as { id?: string })?.id;
   const role = (session?.user as { role?: string })?.role ?? "sales";
   if (!userId) return;
-  const lead = await prisma.crm_lead.findUnique({ 
+  const lead = await prisma.crm_lead.findUnique({
     where: { id: leadId, deletedAt: null }, // 已删除的线索不能更新销售人员
-    select: { salesPersonId: true } 
+    select: { salesPersonId: true }
   });
   if (!lead) return; // 线索不存在或已删除
   if (!(await checkCrmPermission(userId, role, lead))) return;
@@ -377,7 +385,7 @@ export async function batchUpdateLeadSalesPersonAction(
     });
     if (salesPerson?.email) {
       const leads = await prisma.crm_lead.findMany({
-        where: { 
+        where: {
           id: { in: leadIds },
           deletedAt: null, // 只处理未删除的线索
         },
@@ -557,7 +565,7 @@ export async function updateCustomerAction(
     : null;
 
   const actualAmountStr = (formData.get("actualAmount") as string)?.trim();
-  const actualAmount = actualAmountStr && actualAmountStr !== "" 
+  const actualAmount = actualAmountStr && actualAmountStr !== ""
     ? (isNaN(Number(actualAmountStr)) ? null : Number(actualAmountStr))
     : null;
 
@@ -759,7 +767,7 @@ export async function createFollowUpAction(prevState: { error?: string } | null,
   if (!followDate) return { error: "跟进日期必填" };
   if (!followUpById) return { error: "无法获取跟进人，请先登录或确保数据库中有用户" };
 
-  await createFollowUp({
+  const created = await createFollowUp({
     content: content.trim(),
     followUpById,
     followDate: new Date(followDate),
@@ -775,7 +783,7 @@ export async function createFollowUpAction(prevState: { error?: string } | null,
   revalidatePath("/dashboard/crm/leads");
   revalidatePath("/dashboard/crm/customers");
   revalidatePath("/dashboard/crm/opportunities");
-  redirect("/dashboard/crm/follow-ups");
+  return { success: true, followUpId: created.id };
 }
 
 // ============ 跟进记录增强：状态变更时自动创建 ============
@@ -817,13 +825,15 @@ export async function updateLeadStatusWithFollowUpAction(
     });
   }
 
-  // 创建跟进记录
+  // 创建跟进记录（若本次触发了自动建商机，则标记为「线索转商机」以便删除时联动撤回）
+  const didCreateOpportunity = newStatus === "有意向" && !lead.opportunity;
   await createFollowUp({
     content: followUpContent.trim(),
     followUpById: userId,
     followDate: new Date(),
     leadId,
     isSystemGenerated: true, // 标记为状态变更自动生成
+    transitionType: didCreateOpportunity ? "lead_to_opportunity" : null,
   });
 
   revalidatePath("/dashboard/crm/leads");
@@ -1077,21 +1087,21 @@ export async function updateOpportunityStatusWithFollowUpAction(
     return { error: "无权限" };
   }
 
-   // 不允许状态回退：只能从前面的阶段往后走，不能往回调
-   const STATUS_ORDER = ["初步沟通", "方案确认", "待签约", "已赢单", "已丢单"];
-   const currentStatus = opp?.status ?? "";
-   const currentIndex = STATUS_ORDER.indexOf(currentStatus);
-   const newIndex = STATUS_ORDER.indexOf(newStatus);
-   if (
-     currentStatus &&
-     currentIndex !== -1 &&
-     newIndex !== -1 &&
-     newIndex < currentIndex
-   ) {
-     return {
-       error: `不允许将商机状态从「${currentStatus}」回退到「${newStatus}」，如需修改请联系管理员处理。`,
-     };
-   }
+  // 不允许状态回退：只能从前面的阶段往后走，不能往回调
+  const STATUS_ORDER = ["初步沟通", "方案确认", "待签约", "已赢单", "已丢单"];
+  const currentStatus = opp?.status ?? "";
+  const currentIndex = STATUS_ORDER.indexOf(currentStatus);
+  const newIndex = STATUS_ORDER.indexOf(newStatus);
+  if (
+    currentStatus &&
+    currentIndex !== -1 &&
+    newIndex !== -1 &&
+    newIndex < currentIndex
+  ) {
+    return {
+      error: `不允许将商机状态从「${currentStatus}」回退到「${newStatus}」，如需修改请联系管理员处理。`,
+    };
+  }
 
   // 若要变更为「待签约」，必须先填写商机金额
   if (
@@ -1106,17 +1116,19 @@ export async function updateOpportunityStatusWithFollowUpAction(
   // 更新状态
   await updateOpportunityStatus(opportunityId, newStatus, lostReason);
 
-  // 创建跟进记录
+  // 创建跟进记录（若本次会转客户，则标记为「商机转客户」以便删除时联动撤回）
+  const willCreateCustomer = ["待签约", "已赢单"].includes(newStatus);
   await createFollowUp({
     content: followUpContent.trim(),
     followUpById: userId,
     followDate: new Date(),
     opportunityId,
     isSystemGenerated: true,
+    transitionType: willCreateCustomer ? "opportunity_to_customer" : null,
   });
 
   // 若状态为「待签约」或「已赢单」，自动转客户
-  if (["待签约", "已赢单"].includes(newStatus)) {
+  if (willCreateCustomer) {
     await opportunityToCustomer(opportunityId);
   }
 
@@ -1175,7 +1187,7 @@ export async function updateCustomerStatusWithFollowUpAction(
   return { success: true };
 }
 
-/** 手动添加跟进记录（不关联状态变更） */
+/** 手动添加跟进记录（不关联状态变更），返回 followUpId 便于前端上传图片 */
 export async function createManualFollowUpAction(data: {
   content: string;
   leadId?: string;
@@ -1190,7 +1202,7 @@ export async function createManualFollowUpAction(data: {
   const userId = (session?.user as { id?: string })?.id;
   if (!userId) return { error: "未登录" };
 
-  await createFollowUp({
+  const created = await createFollowUp({
     content: data.content.trim(),
     followUpById: userId,
     followDate: new Date(),
@@ -1208,10 +1220,10 @@ export async function createManualFollowUpAction(data: {
   revalidatePath("/dashboard/crm/customers");
   revalidatePath("/dashboard/crm/opportunities");
   revalidatePath("/dashboard/crm/follow-ups");
-  return { success: true };
+  return { success: true, followUpId: created.id };
 }
 
-/** 更新跟进记录（仅 admin） */
+/** 更新跟进记录：仅管理员或该条跟进的创建者可编辑（描述与可选字段，用于修正或补充） */
 export async function updateFollowUpAction(
   id: string,
   data: {
@@ -1224,11 +1236,15 @@ export async function updateFollowUpAction(
     status?: string;
   }
 ) {
-  const session = await auth();
-  const userId = (session?.user as { id?: string })?.id;
+  const session: { user?: { id?: string; role?: string } } | null = await auth();
+  const userId = (session?.user as { id?: string })?.id ?? "";
   const role = (session?.user as { role?: string })?.role ?? "sales";
-  if (role !== "admin") return { error: "无权限" };
   if (!userId) return { error: "未登录" };
+
+  const crmAuth = { userId, role: role as "admin" | "sales" };
+  const row = await getFollowUpByIdIfVisible(crmAuth, id);
+  if (!row) return { error: "跟进不存在或无权限" };
+  if (role !== "admin" && row.followUpById !== userId) return { error: "仅管理员或该条跟进创建者可编辑" };
 
   await updateFollowUp(
     id,
@@ -1246,11 +1262,21 @@ export async function updateFollowUpAction(
   return { success: true };
 }
 
-/** 删除跟进记录（仅 admin） */
+/** 删除跟进记录：仅管理员或该条创建者可删；状态变更记录不可删（保留链条），请用编辑修正 */
 export async function deleteFollowUpAction(id: string) {
-  const session = await auth();
+  const session: { user?: { id?: string; role?: string } } | null = await auth();
+  const userId = (session?.user as { id?: string })?.id ?? "";
   const role = (session?.user as { role?: string })?.role ?? "sales";
-  if (role !== "admin") return { error: "无权限" };
+  const crmAuth = userId && role ? { userId, role: role as "admin" | "sales" } : null;
+  if (!crmAuth) return { error: "请先登录" };
+
+  const row = await getFollowUpByIdIfVisible(crmAuth, id);
+  if (!row) return { error: "跟进不存在或无权限" };
+  if (role !== "admin" && row.followUpById !== userId) return { error: "仅管理员或该条跟进创建者可删除" };
+
+  if (row.transitionType) {
+    return { error: "状态变更记录不可删除，请使用「编辑」修正描述或补充信息。" };
+  }
 
   await deleteFollowUp(id);
 

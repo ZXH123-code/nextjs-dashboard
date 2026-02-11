@@ -6,13 +6,16 @@ import { useAlert } from "@/hooks/use-alert";
 interface WriteFollowUpDialogProps {
   isOpen: boolean;
   onClose: () => void;
-  onConfirm: (data: {
-    content: string;
-    contactPerson?: string;
-    summary?: string;
-    nextStep?: string;
-    customerNeeds?: string;
-  }) => void;
+  onConfirm: (
+    data: {
+      content: string;
+      contactPerson?: string;
+      summary?: string;
+      nextStep?: string;
+      customerNeeds?: string;
+    },
+    files?: File[]
+  ) => void;
   recordType: "线索" | "商机" | "客户";
   recordName: string;
   isSubmitting?: boolean;
@@ -37,6 +40,7 @@ export function WriteFollowUpDialog({
     nextStep: "",
     customerNeeds: "",
   });
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const { showAlert, AlertComponent } = useAlert();
 
   const handleConfirm = () => {
@@ -44,11 +48,10 @@ export function WriteFollowUpDialog({
       showAlert("请填写跟进内容", { type: "warning", title: "提示" });
       return;
     }
-    onConfirm(formData);
+    onConfirm(formData, selectedFiles.length > 0 ? selectedFiles : undefined);
   };
 
   const handleCancel = () => {
-    // 重置表单
     setFormData({
       content: "",
       contactPerson: "",
@@ -56,6 +59,7 @@ export function WriteFollowUpDialog({
       nextStep: "",
       customerNeeds: "",
     });
+    setSelectedFiles([]);
     onClose();
   };
 
@@ -149,6 +153,55 @@ export function WriteFollowUpDialog({
               placeholder="例如：需要支持自定义配置"
               disabled={isSubmitting}
             />
+          </div>
+
+          <div>
+            <label className="mb-2 block text-sm font-medium text-gray-700">
+              上传图片（可选）
+            </label>
+            <div
+              className="rounded-md border-2 border-dashed border-gray-300 bg-gray-50/50 p-4 transition-colors hover:border-blue-300 hover:bg-blue-50/30"
+              onDragOver={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                e.currentTarget.classList.add("border-blue-400", "bg-blue-50/50");
+              }}
+              onDragLeave={(e) => {
+                e.preventDefault();
+                e.currentTarget.classList.remove("border-blue-400", "bg-blue-50/50");
+              }}
+              onDrop={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                e.currentTarget.classList.remove("border-blue-400", "bg-blue-50/50");
+                if (isSubmitting) return;
+                const accepted = ["image/jpeg", "image/png", "image/gif", "image/webp"];
+                const files = Array.from(e.dataTransfer.files).filter((f) =>
+                  accepted.includes(f.type)
+                );
+                if (files.length) setSelectedFiles((prev) => [...prev, ...files]);
+              }}
+            >
+              <input
+                type="file"
+                accept="image/jpeg,image/png,image/gif,image/webp"
+                multiple
+                disabled={isSubmitting}
+                className="w-full text-sm text-gray-600 file:mr-2 file:rounded-md file:border-0 file:bg-blue-50 file:px-3 file:py-1.5 file:text-blue-700"
+                onChange={(e) => {
+                  const f = e.target.files;
+                  if (f?.length) setSelectedFiles(Array.from(f));
+                }}
+              />
+              <p className="mt-2 text-center text-xs text-gray-500">
+                或将图片拖入此处
+              </p>
+            </div>
+            {selectedFiles.length > 0 && (
+              <p className="mt-1 text-xs text-gray-500">
+                已选 {selectedFiles.length} 张图片
+              </p>
+            )}
           </div>
         </div>
 

@@ -1,4 +1,4 @@
-import { getCrmAuth } from "@/app/lib/crm";
+import { getCrmAuth, getUsers } from "@/app/lib/crm";
 import { redirect } from "next/navigation";
 import { LeadImportClient } from "../LeadImportClient";
 import Link from "next/link";
@@ -17,6 +17,13 @@ export default async function LeadImportPage() {
   const role = auth?.role ?? "sales";
   if (role !== "admin") {
     redirect("/dashboard/crm/leads");
+  }
+
+  let users: Awaited<ReturnType<typeof getUsers>> = [];
+  try {
+    users = await getUsers();
+  } catch {
+    // ignore
   }
 
   return (
@@ -44,7 +51,7 @@ export default async function LeadImportPage() {
           </CardDescription>
         </CardHeader>
         <CardContent className="pt-0">
-          <LeadImportClient />
+          <LeadImportClient users={users} />
         </CardContent>
       </Card>
     </main>

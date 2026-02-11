@@ -1,15 +1,28 @@
 "use client";
 
-import { useActionState, useState, useMemo } from "react";
+import { useActionState, useState, useMemo, useEffect, useRef } from "react";
+import { useRouter } from "next/navigation";
 import { createFollowUpAction } from "@/app/lib/crm-actions";
 import Link from "next/link";
 import { Label } from "@/components/ui/label";
-import { Input } from "@/components/ui/input";
 import { FormSelect } from "@/components/ui/form-select";
 
 type Lead = { id: string; customerName: string };
 type Customer = { id: string; name: string; opportunityId: string | null };
 type Opportunity = { id: string; name: string; customerId: string | null };
+
+async function uploadFollowUpImage(followUpId: string, file: File): Promise<void> {
+  const formData = new FormData();
+  formData.set("file", file);
+  const res = await fetch(`/api/crm/follow-ups/${followUpId}/images/upload`, {
+    method: "POST",
+    body: formData,
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error ?? "上传失败");
+  }
+}
 
 export function FollowUpForm({
   leads,
@@ -20,10 +33,14 @@ export function FollowUpForm({
   customers: Customer[];
   opportunities: Opportunity[];
 }) {
+  const router = useRouter();
   const [state, formAction, isPending] = useActionState(createFollowUpAction, null);
   const [leadId, setLeadId] = useState("");
   const [customerId, setCustomerId] = useState("");
   const [opportunityId, setOpportunityId] = useState("");
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const hasRedirected = useRef(false);
 
   // 选择线索后：自动清空商机和客户（线索和商机/客户是不同阶段的记录）
   const handleLeadChange = (val: string) => {
@@ -84,11 +101,41 @@ export function FollowUpForm({
     ...filteredOpportunities.map((o) => ({ value: o.id, label: o.name })),
   ];
 
+  // 提交成功后：若有图片则先上传再跳转，否则直接跳转
+  useEffect(() => {
+    const result = state as { success?: boolean; followUpId?: string } | null;
+    if (!result?.followUpId || hasRedirected.current) return;
+    hasRedirected.current = true;
+    setUploadError(null);
+
+    if (selectedFiles.length === 0) {
+      router.push("/dashboard/crm/follow-ups");
+      return;
+    }
+
+    (async () => {
+      try {
+        for (const file of selectedFiles) {
+          await uploadFollowUpImage(result.followUpId!, file);
+        }
+        router.push("/dashboard/crm/follow-ups");
+      } catch (e) {
+        setUploadError(e instanceof Error ? e.message : "上传图片失败");
+        hasRedirected.current = false;
+      }
+    })();
+  }, [state, selectedFiles.length, router]);
+
   return (
     <form action={formAction} className="max-w-xl space-y-4 rounded-lg border bg-card p-6">
       {state?.error && (
         <div className="rounded-md bg-destructive/10 px-4 py-3 text-sm text-destructive">
           {state.error}
+        </div>
+      )}
+      {uploadError && (
+        <div className="rounded-md bg-destructive/10 px-4 py-3 text-sm text-destructive">
+          {uploadError}
         </div>
       )}
       
@@ -116,6 +163,55 @@ export function FollowUpForm({
           defaultValue={new Date().toISOString().slice(0, 10)}
           className="w-full rounded-md border px-3 py-2"
         />
+      </div>
+
+      {/* 上传图片（可选，不随 form 提交，提交成功后按 followUpId 再上传） */}
+      <div>
+        <label className="mb-1 block text-sm font-medium">上传图片（可选）</label>
+        <div
+          className="rounded-md border-2 border-dashed border-muted-foreground/30 bg-muted/20 p-4 transition-colors hover:border-primary/50 hover:bg-muted/30"
+          onDragOver={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (isPending) return;
+            e.currentTarget.classList.add("border-primary", "bg-muted/40");
+          }}
+          onDragLeave={(e) => {
+            e.preventDefault();
+            e.currentTarget.classList.remove("border-primary", "bg-muted/40");
+          }}
+          onDrop={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            e.currentTarget.classList.remove("border-primary", "bg-muted/40");
+            if (isPending) return;
+            const accepted = ["image/jpeg", "image/png", "image/gif", "image/webp"];
+            const files = Array.from(e.dataTransfer.files).filter((f) =>
+              accepted.includes(f.type)
+            );
+            if (files.length) setSelectedFiles((prev) => [...prev, ...files]);
+          }}
+        >
+          <input
+            type="file"
+            accept="image/jpeg,image/png,image/gif,image/webp"
+            multiple
+            disabled={isPending}
+            className="w-full text-sm text-muted-foreground file:mr-2 file:rounded-md file:border-0 file:bg-primary file:px-3 file:py-1.5 file:text-primary-foreground"
+            onChange={(e) => {
+              const files = e.target.files;
+              if (files?.length) setSelectedFiles(Array.from(files));
+            }}
+          />
+          <p className="mt-2 text-center text-xs text-muted-foreground">
+            或将图片拖入此处
+          </p>
+        </div>
+        {selectedFiles.length > 0 && (
+          <p className="mt-1 text-xs text-muted-foreground">
+            已选 {selectedFiles.length} 张图片，保存后将自动上传
+          </p>
+        )}
       </div>
 
       {/* 关联对象选择区域 */}

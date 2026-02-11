@@ -124,12 +124,15 @@ export async function getLeadById(id: string, auth: CrmAuth, includeDeleted = fa
 export async function createLead(data: {
   customerName: string;
   nickname?: string;
+  contactPerson?: string;
+  contactEmail?: string;
   city?: string;
   address?: string;
   industry?: string;
   leadSource?: string;
   customerTier?: string;
   contactPhone?: string;
+  remark?: string;
   salesPersonId?: string;
   status?: string;
 }) {
@@ -137,12 +140,15 @@ export async function createLead(data: {
     data: {
       customerName: data.customerName,
       nickname: data.nickname,
+      contactPerson: data.contactPerson,
+      contactEmail: data.contactEmail,
       city: data.city,
       address: data.address,
       industry: data.industry,
       leadSource: data.leadSource,
       customerTier: data.customerTier,
       contactPhone: data.contactPhone,
+      remark: data.remark,
       salesPersonId: data.salesPersonId,
       status: data.status ?? "未跟进",
     },
@@ -182,12 +188,15 @@ export async function updateLead(
   data: {
     customerName?: string;
     nickname?: string;
+    contactPerson?: string;
+    contactEmail?: string;
     city?: string;
     address?: string;
     industry?: string;
     leadSource?: string;
     customerTier?: string;
     contactPhone?: string;
+    remark?: string;
     salesPersonId?: string | null;
     status?: string;
     isKeyFocus?: boolean;
@@ -198,12 +207,15 @@ export async function updateLead(
     data: {
       ...(data.customerName != null && { customerName: data.customerName }),
       ...(data.nickname !== undefined && { nickname: data.nickname }),
+      ...(data.contactPerson !== undefined && { contactPerson: data.contactPerson }),
+      ...(data.contactEmail !== undefined && { contactEmail: data.contactEmail }),
       ...(data.city !== undefined && { city: data.city }),
       ...(data.address !== undefined && { address: data.address }),
       ...(data.industry !== undefined && { industry: data.industry }),
       ...(data.leadSource !== undefined && { leadSource: data.leadSource }),
       ...(data.customerTier !== undefined && { customerTier: data.customerTier }),
       ...(data.contactPhone !== undefined && { contactPhone: data.contactPhone }),
+      ...(data.remark !== undefined && { remark: data.remark }),
       ...(data.salesPersonId !== undefined && { salesPersonId: data.salesPersonId }),
       ...(data.status != null && { status: data.status }),
       ...(data.isKeyFocus !== undefined && { isKeyFocus: data.isKeyFocus }),
@@ -649,6 +661,7 @@ export async function createFollowUp(data: {
   customerNeeds?: string;
   status?: string;
   isSystemGenerated?: boolean; // 是否为系统自动生成（状态变更时）
+  transitionType?: string | null; // lead_to_opportunity | opportunity_to_customer，删除该条时联动撤回
 }) {
   return prisma.crm_follow_up.create({
     data: {
@@ -664,6 +677,7 @@ export async function createFollowUp(data: {
       customerNeeds: data.customerNeeds,
       status: data.status,
       isSystemGenerated: data.isSystemGenerated ?? false,
+      transitionType: data.transitionType ?? undefined,
     },
   });
 }
@@ -742,8 +756,47 @@ export async function getFollowUpTimeline(
       lead: { select: { id: true, customerName: true } },
       customer: { select: { id: true, name: true } },
       opportunity: { select: { id: true, name: true } },
+      _count: { select: { images: true } },
     },
   });
+}
+
+/** 按需获取某条跟进的图片列表（不校验权限，由调用方先确认可见性） */
+export async function getFollowUpImages(followUpId: string) {
+  return prisma.crm_follow_up_image.findMany({
+    where: { followUpId },
+    orderBy: { uploadedAt: "asc" },
+    select: { id: true, blobUrl: true, fileName: true, uploadedAt: true },
+  });
+}
+
+/** 获取单条跟进（仅当当前用户有权限查看时返回，用于 GET images / 补传 / 删图 前校验） */
+export async function getFollowUpByIdIfVisible(
+  auth: CrmAuth,
+  followUpId: string
+) {
+  if (!auth) return null;
+  const row = await prisma.crm_follow_up.findUnique({
+    where: { id: followUpId },
+    select: {
+      id: true,
+      followUpById: true,
+      leadId: true,
+      customerId: true,
+      opportunityId: true,
+      transitionType: true,
+      lead: { select: { salesPersonId: true } },
+      customer: { select: { salesPersonId: true } },
+      opportunity: { select: { salesPersonId: true } },
+    },
+  });
+  if (!row) return null;
+  if (auth.role === "admin") return row;
+  if (row.followUpById === auth.userId) return row;
+  if (row.lead?.salesPersonId === auth.userId) return row;
+  if (row.customer?.salesPersonId === auth.userId) return row;
+  if (row.opportunity?.salesPersonId === auth.userId) return row;
+  return null;
 }
 
 /** 更新跟进记录（仅 admin 可用） */
@@ -776,8 +829,60 @@ export async function updateFollowUp(
   });
 }
 
-/** 删除跟进记录（仅 admin 可用） */
+/** 删除状态变更跟进时的业务撤回：根据 transitionType 联动删除/回滚商机或客户 */
+export async function rollbackFollowUpTransition(row: {
+  transitionType: string | null;
+  leadId: string | null;
+  opportunityId: string | null;
+}) {
+  const { transitionType, leadId, opportunityId } = row;
+  if (transitionType === "lead_to_opportunity" && leadId) {
+    const lead = await prisma.crm_lead.findUnique({
+      where: { id: leadId, deletedAt: null },
+      include: { opportunity: { include: { customer: true } } },
+    });
+    if (lead?.opportunity) {
+      if (lead.opportunity.customer) {
+        await prisma.crm_customer.delete({ where: { id: lead.opportunity.customer.id } });
+      }
+      await prisma.crm_opportunity.delete({ where: { id: lead.opportunity.id } });
+      await prisma.crm_lead.update({
+        where: { id: leadId },
+        data: { status: "未跟进" },
+      });
+    }
+    return;
+  }
+  if (transitionType === "opportunity_to_customer" && opportunityId) {
+    const opp = await prisma.crm_opportunity.findUnique({
+      where: { id: opportunityId },
+      include: { customer: true },
+    });
+    if (opp?.customer) {
+      await prisma.crm_customer.delete({ where: { id: opp.customer.id } });
+    }
+    if (opp) {
+      await prisma.crm_opportunity.update({
+        where: { id: opportunityId },
+        data: { status: "需求确认" },
+      });
+    }
+  }
+}
+
+/** 删除跟进记录：先删该跟进下所有图片（Vercel Blob），再删跟进（DB 级联删 crm_follow_up_image） */
 export async function deleteFollowUp(id: string) {
+  const images = await prisma.crm_follow_up_image.findMany({
+    where: { followUpId: id },
+    select: { blobUrl: true, pathname: true },
+  });
+  for (const img of images) {
+    try {
+      await del(img.blobUrl);
+    } catch (e) {
+      console.warn("删除跟进图片 Blob 失败（可能已不存在）:", img.blobUrl, e);
+    }
+  }
   return prisma.crm_follow_up.delete({ where: { id } });
 }
 

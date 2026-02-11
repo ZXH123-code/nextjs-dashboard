@@ -1,10 +1,18 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Upload, FileSpreadsheet, AlertCircle, CheckCircle2 } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 type RowPreview = {
   row: number;
@@ -13,13 +21,15 @@ type RowPreview = {
   data: {
     客户名称: string;
     昵称?: string;
+    联系人?: string;
     城市?: string;
     详细地址?: string;
     行业?: string;
     线索来源?: string;
     客户分层?: string;
-    销售人员邮箱?: string;
+    预览销售人员?: string;
     状态: string;
+    其他字段数?: number;
   };
 };
 
@@ -34,13 +44,24 @@ type ImportResult = {
   preview?: RowPreview[];
 };
 
-export function LeadImportClient() {
+type User = { id: string; name: string };
+
+export function LeadImportClient({ users }: { users: User[] }) {
   const router = useRouter();
   const [file, setFile] = useState<File | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [loading, setLoading] = useState(false);
   const [importing, setImporting] = useState(false);
   const [result, setResult] = useState<ImportResult | null>(null);
+  /** 批量指定销售人员：导入时若选择，则所有线索均分配给该销售；空或不指定则为 __none__ */
+  const [salesPersonId, setSalesPersonId] = useState<string>("__none__");
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  function clearFile() {
+    setFile(null);
+    setResult(null);
+    setSalesPersonId("__none__");
+  }
 
   function handleFileChange(f: File | null) {
     if (f && !f.name.endsWith(".xlsx")) {
@@ -67,6 +88,9 @@ export function LeadImportClient() {
       const formData = new FormData();
       formData.append("file", file);
       formData.append("mode", mode);
+      if (mode === "import" && salesPersonId && salesPersonId !== "__none__") {
+        formData.append("salesPersonId", salesPersonId);
+      }
       const res = await fetch("/api/crm/leads/import", {
         method: "POST",
         body: formData,
@@ -112,8 +136,15 @@ export function LeadImportClient() {
       {/* 上传 & 说明 & 操作按钮 */}
       <div className="space-y-4">
         <div
-          className={`flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed bg-muted/40 px-6 py-10 text-center transition-colors ${dragOver ? "border-primary bg-primary/5" : "border-muted-foreground/30"
-            }`}
+          className={cn(
+            "flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed px-6 py-10 text-center transition-colors cursor-pointer",
+            dragOver
+              ? "border-primary bg-primary/5"
+              : file
+              ? "border-emerald-500 bg-emerald-50/80"
+              : "border-muted-foreground/30 bg-muted/40"
+          )}
+          onClick={() => fileInputRef.current?.click()}
           onDragOver={(e) => {
             e.preventDefault();
             setDragOver(true);
@@ -129,37 +160,89 @@ export function LeadImportClient() {
             if (dropped) handleFileChange(dropped);
           }}
         >
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".xlsx"
+            onChange={(e) => handleFileChange(e.target.files?.[0] ?? null)}
+            className="hidden"
+          />
           <Upload className="h-8 w-8 text-muted-foreground" />
           <div className="text-sm text-muted-foreground">
-            <p className="font-medium mb-1">拖拽 Excel 文件到此处，或点击选择文件</p>
-            <p>.xlsx，建议不超过 5MB</p>
+            <p className="font-semibold mb-1">
+              将 Excel 拖入此区域，或点击此区域选择文件
+            </p>
+            <p className="text-xs opacity-80">仅支持 .xlsx，建议不超过 5MB</p>
           </div>
-          <div className="mt-2 flex flex-col items-center gap-2">
-            <Input
-              type="file"
-              accept=".xlsx"
-              onChange={(e) => handleFileChange(e.target.files?.[0] ?? null)}
-              className="max-w-xs cursor-pointer bg-background"
-            />
-            {file && (
-              <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <FileSpreadsheet className="h-4 w-4" />
-                <span>{shortFileName}</span>
-                <span>({(file.size / 1024).toFixed(1)} KB)</span>
-              </div>
-            )}
-          </div>
+          {file && (
+            <div className="mt-1 text-[11px] text-slate-700">
+              已选择文件，点击此区域可重新选择。
+            </div>
+          )}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+          <span className="font-medium">当前文件：</span>
+          {file ? (
+            <>
+              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] text-emerald-700 border border-emerald-200">
+                <FileSpreadsheet className="h-3 w-3" />
+                <span className="max-w-[220px] truncate" title={file.name}>
+                  {shortFileName}
+                </span>
+                <span className="text-[10px] opacity-80">
+                  ({(file.size / 1024).toFixed(1)} KB)
+                </span>
+              </span>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6 text-xs"
+                onClick={clearFile}
+                title="清除文件"
+              >
+                ×
+              </Button>
+            </>
+          ) : (
+            <span className="text-[11px] text-muted-foreground/80">
+              未选择文件
+            </span>
+          )}
         </div>
 
         <div className="rounded-md bg-muted/40 p-3 text-base text-muted-foreground space-y-1">
           <p className="font-semibold text-foreground">支持的表头（第一行）：</p>
           <p>必填：客户名称</p>
-          <p>选填：昵称、城市、详细地址、行业、线索来源、客户分层、销售人员邮箱、状态</p>
+          <p>选填：昵称、联系人、联系人邮箱、城市、详细地址、行业、线索来源、客户分层、备注</p>
           <p>
-            状态仅支持：未跟进 / 跟进中 / 有意向 / 无意向（为空则默认未跟进）。销售人员邮箱会按
-            users.email 匹配。
+            导入后状态均为「未跟进」。可在下方批量指定一名销售，则全部线索均分配给他；若不指定，则所有线索的销售人员均为「未指定」。
           </p>
         </div>
+
+        {canConfirmImport && (
+          <div className="flex flex-wrap items-center gap-4 rounded-lg border bg-muted/30 p-3">
+            <div className="flex items-center gap-2">
+              <Label htmlFor="import-sales-person" className="text-sm font-medium">
+                批量指定销售人员
+              </Label>
+              <Select value={salesPersonId} onValueChange={setSalesPersonId}>
+                <SelectTrigger id="import-sales-person" className="w-[220px]">
+                  <SelectValue placeholder="不指定（按 Excel 列匹配）" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">不指定（按 Excel 列匹配）</SelectItem>
+                  {users.map((u) => (
+                    <SelectItem key={u.id} value={u.id}>
+                      {u.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+        )}
 
         <div className="flex flex-wrap items-center gap-3">
           <Button
@@ -247,15 +330,26 @@ export function LeadImportClient() {
             <table className="w-full border-collapse text-sm">
               <thead className="bg-muted/60 sticky top-0 z-10">
                 <tr>
+                  <th colSpan={3} className="border px-2 py-1 text-left text-xs text-muted-foreground">
+                    预览元信息
+                  </th>
+                  <th colSpan={8} className="border px-2 py-1 text-left text-xs text-muted-foreground">
+                    预览字段（导入后的主要展示字段）
+                  </th>
+                </tr>
+                <tr>
                   <th className="border px-2 py-1 text-left">行号</th>
-                  <th className="border px-2 py-1 text-left">状态</th>
+                  <th className="border px-2 py-1 text-left">导入结果</th>
                   <th className="border px-2 py-1 text-left">错误信息</th>
                   <th className="border px-2 py-1 text-left">客户名称</th>
+                  <th className="border px-2 py-1 text-left">联系人</th>
                   <th className="border px-2 py-1 text-left">城市</th>
                   <th className="border px-2 py-1 text-left">行业</th>
                   <th className="border px-2 py-1 text-left">线索来源</th>
-                  <th className="border px-2 py-1 text-left">销售人员邮箱</th>
+                  <th className="border px-2 py-1 text-left">客户等级</th>
+                  <th className="border px-2 py-1 text-left">预览销售人员</th>
                   <th className="border px-2 py-1 text-left">状态值</th>
+                  <th className="border px-2 py-1 text-left">其他字段</th>
                 </tr>
               </thead>
               <tbody>
@@ -272,13 +366,18 @@ export function LeadImportClient() {
                       {row.message ?? "-"}
                     </td>
                     <td className="border px-2 py-1">{row.data.客户名称}</td>
+                    <td className="border px-2 py-1">{row.data.联系人 ?? "-"}</td>
                     <td className="border px-2 py-1">{row.data.城市 ?? "-"}</td>
                     <td className="border px-2 py-1">{row.data.行业 ?? "-"}</td>
                     <td className="border px-2 py-1">{row.data.线索来源 ?? "-"}</td>
-                    <td className="border px-2 py-1">
-                      {row.data.销售人员邮箱 ?? "-"}
-                    </td>
+                    <td className="border px-2 py-1">{row.data.客户分层 ?? "-"}</td>
+                    <td className="border px-2 py-1">{row.data.预览销售人员 ?? "未指定"}</td>
                     <td className="border px-2 py-1">{row.data.状态}</td>
+                    <td className="border px-2 py-1 text-[11px]">
+                      {row.data.其他字段数 != null && row.data.其他字段数 > 0
+                        ? `有（${row.data.其他字段数}）`
+                        : "-"}
+                    </td>
                   </tr>
                 ))}
               </tbody>

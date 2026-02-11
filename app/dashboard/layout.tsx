@@ -3,6 +3,9 @@ import TopBar from "@/app/ui/dashboard/topbar";
 import { auth } from "@/auth";
 import { Watermark } from "@/components/ui/watermark";
 
+/** 使用 auth() 会读 headers，必须动态渲染 */
+export const dynamic = "force-dynamic";
+
 export default async function Layout({ children }: { children: React.ReactNode }) {
   const session = await auth();
   const role = (session?.user as { role?: string })?.role ?? "sales";

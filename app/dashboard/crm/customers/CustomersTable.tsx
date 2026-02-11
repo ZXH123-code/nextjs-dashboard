@@ -142,13 +142,16 @@ export function CustomersTable({
     });
   };
 
-  const handleWriteFollowUp = async (data: {
-    content: string;
-    contactPerson?: string;
-    summary?: string;
-    nextStep?: string;
-    customerNeeds?: string;
-  }) => {
+  const handleWriteFollowUp = async (
+    data: {
+      content: string;
+      contactPerson?: string;
+      summary?: string;
+      nextStep?: string;
+      customerNeeds?: string;
+    },
+    files?: File[]
+  ) => {
     if (!writeFollowUpCustomerId) return;
 
     setIsSubmitting(true);
@@ -159,15 +162,31 @@ export function CustomersTable({
       });
       if (result?.error) {
         showAlert(result.error, { type: "error", title: "操作失败" });
-      } else {
-        const customerIdJustSubmitted = writeFollowUpCustomerId;
-        setWriteFollowUpCustomerId(null);
-        setFollowUpRefreshKeys((prev) => ({
-          ...prev,
-          [customerIdJustSubmitted]: (prev[customerIdJustSubmitted] ?? 0) + 1,
-        }));
-        router.refresh();
+        return;
       }
+      const followUpId = (result as { followUpId?: string })?.followUpId;
+      if (followUpId && files?.length) {
+        for (const file of files) {
+          const formData = new FormData();
+          formData.set("file", file);
+          const res = await fetch(
+            `/api/crm/follow-ups/${followUpId}/images/upload`,
+            { method: "POST", body: formData }
+          );
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            showAlert(err.error ?? "上传图片失败", { type: "error", title: "操作失败" });
+            return;
+          }
+        }
+      }
+      const customerIdJustSubmitted = writeFollowUpCustomerId;
+      setWriteFollowUpCustomerId(null);
+      setFollowUpRefreshKeys((prev) => ({
+        ...prev,
+        [customerIdJustSubmitted]: (prev[customerIdJustSubmitted] ?? 0) + 1,
+      }));
+      router.refresh();
     } catch (error) {
       console.error("添加跟进记录失败:", error);
       showAlert("添加跟进记录失败", { type: "error", title: "操作失败" });
@@ -595,6 +614,7 @@ export function CustomersTable({
                           <FollowUpTimeline
                             customerId={customer.id}
                             currentUserRole={currentUserRole}
+                            currentUserId={currentUserId}
                             refreshKey={followUpRefreshKeys[customer.id] ?? 0}
                           />
                         </div>

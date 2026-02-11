@@ -47,6 +47,20 @@ export function NewLeadForm({ users }: { users: User[] }) {
         <Label htmlFor="nickname">昵称</Label>
         <Input id="nickname" name="nickname" placeholder="选填" />
       </div>
+      <div className="grid gap-4 md:grid-cols-2">
+        <div className="space-y-2">
+          <Label htmlFor="contactPerson">联系人</Label>
+          <Input id="contactPerson" name="contactPerson" placeholder="例如：张三、李总" />
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="contactPhone">联系方式</Label>
+          <Input id="contactPhone" name="contactPhone" placeholder="手机号或座机" />
+        </div>
+      </div>
+      <div className="space-y-2">
+        <Label htmlFor="contactEmail">联系人邮箱</Label>
+        <Input id="contactEmail" name="contactEmail" type="email" placeholder="选填" />
+      </div>
       <div className="space-y-2">
         <Label htmlFor="city">城市</Label>
         <Input id="city" name="city" placeholder="选填" />
@@ -66,6 +80,15 @@ export function NewLeadForm({ users }: { users: User[] }) {
       <div className="space-y-2">
         <Label htmlFor="customerTier">客户分层</Label>
         <Input id="customerTier" name="customerTier" placeholder="如：A/B/C" />
+      </div>
+      <div className="space-y-2">
+        <Label htmlFor="remark">线索备注</Label>
+        <textarea
+          id="remark"
+          name="remark"
+          placeholder="可记录客户需求、背景信息等"
+          className="min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        />
       </div>
       <div className="space-y-2">
         <Label>销售人员</Label>

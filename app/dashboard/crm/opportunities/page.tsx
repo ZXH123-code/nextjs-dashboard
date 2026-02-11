@@ -17,6 +17,7 @@ export default async function OpportunitiesPage({
   let opportunities: Awaited<ReturnType<typeof getOpportunities>> = [];
   let users: Awaited<ReturnType<typeof getUsers>> = [];
   let currentUserRole = "sales";
+  let currentUserId: string | undefined;
   try {
     const crmAuth = await getCrmAuth();
     [opportunities, users] = await Promise.all([
@@ -26,6 +27,7 @@ export default async function OpportunitiesPage({
 
     const session = await auth();
     currentUserRole = (session?.user as { role?: string })?.role ?? "sales";
+    currentUserId = (session?.user as { id?: string })?.id;
   } catch (e) {
     console.error("获取商机失败:", e);
   }
@@ -63,6 +65,7 @@ export default async function OpportunitiesPage({
       <OpportunitiesTable
         opportunities={serializedOpps}
         currentUserRole={currentUserRole}
+        currentUserId={currentUserId}
         users={users}
         highlightId={params.highlight}
       />

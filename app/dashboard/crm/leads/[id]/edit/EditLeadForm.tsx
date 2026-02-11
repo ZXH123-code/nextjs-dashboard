@@ -12,6 +12,9 @@ type Lead = {
   id: string;
   customerName: string;
   nickname: string | null;
+  contactPerson: string | null;
+  contactEmail: string | null;
+  contactPhone: string | null;
   city: string | null;
   address: string | null;
   industry: string | null;
@@ -19,6 +22,9 @@ type Lead = {
   customerTier: string | null;
   salesPersonId: string | null;
   status: string;
+  remark: string | null;
+  importSource: string | null;
+  extraFields: Record<string, unknown> | null;
 };
 
 type User = { id: string; name: string };
@@ -54,6 +60,36 @@ export function EditLeadForm({
         <Label htmlFor="nickname">昵称</Label>
         <Input id="nickname" name="nickname" defaultValue={lead.nickname ?? ""} placeholder="选填" />
       </div>
+      <div className="grid gap-4 md:grid-cols-2">
+        <div className="space-y-2">
+          <Label htmlFor="contactPerson">联系人</Label>
+          <Input
+            id="contactPerson"
+            name="contactPerson"
+            defaultValue={lead.contactPerson ?? ""}
+            placeholder="例如：张三、李总"
+          />
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="contactPhone">联系方式</Label>
+          <Input
+            id="contactPhone"
+            name="contactPhone"
+            defaultValue={lead.contactPhone ?? ""}
+            placeholder="手机号或座机"
+          />
+        </div>
+      </div>
+      <div className="space-y-2">
+        <Label htmlFor="contactEmail">联系人邮箱</Label>
+        <Input
+          id="contactEmail"
+          name="contactEmail"
+          type="email"
+          defaultValue={lead.contactEmail ?? ""}
+          placeholder="选填"
+        />
+      </div>
       <div className="space-y-2">
         <Label htmlFor="city">城市</Label>
         <Input id="city" name="city" defaultValue={lead.city ?? ""} placeholder="选填" />
@@ -85,6 +121,16 @@ export function EditLeadForm({
         />
       </div>
       <div className="space-y-2">
+        <Label htmlFor="remark">线索备注</Label>
+        <textarea
+          id="remark"
+          name="remark"
+          defaultValue={lead.remark ?? ""}
+          placeholder="可记录客户需求、背景信息等"
+          className="min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        />
+      </div>
+      <div className="space-y-2">
         <Label>销售人员</Label>
         <FormSelect
           name="salesPersonId"
@@ -105,6 +151,29 @@ export function EditLeadForm({
           placeholder="选择状态"
         />
       </div>
+      {(lead.importSource || (lead.extraFields && Object.keys(lead.extraFields).length > 0)) && (
+        <div className="space-y-2 rounded-lg border bg-muted/40 p-3 text-xs text-muted-foreground">
+          <div className="font-medium text-foreground">其他信息（只读）</div>
+          {lead.importSource && (
+            <div>
+              <span className="font-medium">导入来源：</span>
+              <span>{lead.importSource}</span>
+            </div>
+          )}
+          {lead.extraFields && Object.keys(lead.extraFields).length > 0 && (
+            <div className="mt-1 space-y-1">
+              {Object.entries(lead.extraFields).map(([key, value]) => (
+                <div key={key} className="flex gap-1">
+                  <span className="min-w-[72px] shrink-0 text-muted-foreground">{key}：</span>
+                  <span className="break-all">
+                    {typeof value === "object" ? JSON.stringify(value) : String(value ?? "")}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
       <div className="flex gap-4 pt-4">
         <button
           type="submit"
