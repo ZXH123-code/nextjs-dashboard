@@ -49,6 +49,26 @@ type RowPreview = {
   };
 };
 
+type LeadMappingEntry = {
+  targetField: string | null;
+};
+
+type LeadMapping = Record<string, LeadMappingEntry>;
+
+const ALLOWED_TARGET_FIELDS = new Set<string>([
+  "customerName",
+  "nickname",
+  "contactPerson",
+  "contactEmail",
+  "contactPhone",
+  "city",
+  "address",
+  "industry",
+  "leadSource",
+  "customerTier",
+  "remark",
+]);
+
 export async function POST(req: Request) {
   // 权限校验：仅 admin 可导入
   const session = await auth();
@@ -79,6 +99,33 @@ export async function POST(req: Request) {
   }
 
   try {
+    // 解析可选的前端字段映射配置
+    let mapping: LeadMapping | null = null;
+    const mappingRaw = formData.get("mapping");
+    if (typeof mappingRaw === "string" && mappingRaw.trim()) {
+      try {
+        const parsed = JSON.parse(mappingRaw) as unknown;
+        if (parsed && typeof parsed === "object") {
+          const obj: LeadMapping = {};
+          for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+            if (!key) continue;
+            const v = value as { targetField?: unknown } | null;
+            const tf = v && typeof v === "object" ? (v.targetField as unknown) : undefined;
+            if (tf === null) {
+              // 显式选择「忽略该列」
+              obj[key] = { targetField: null };
+            } else if (typeof tf === "string" && ALLOWED_TARGET_FIELDS.has(tf)) {
+              obj[key] = { targetField: tf };
+            }
+          }
+          mapping = Object.keys(obj).length > 0 ? obj : null;
+        }
+      } catch {
+        // 映射解析失败时忽略，继续走旧逻辑
+        mapping = null;
+      }
+    }
+
     const arrayBuffer = await file.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
     const workbook = XLSX.read(buffer, { type: "buffer" });
@@ -124,11 +171,57 @@ export async function POST(req: Request) {
       "联系人",
       "联系人邮箱",
       "备注",
+      // 一些常见的联系方式表头，统一映射到 contactPhone
+      "手机号",
+      "手机",
+      "手机号码",
+      "电话",
+      "电话号",
+      "联系电话",
+      "座机",
+      "传真",
+      "传真号",
     ]);
+
+    // 反向索引：某个标准字段对应了哪些 Excel 表头（来自 AI/用户映射）
+    const headersByTargetField: Record<string, string[]> = {};
+    if (mapping) {
+      for (const [header, entry] of Object.entries(mapping)) {
+        if (!entry || !entry.targetField) continue;
+        if (!headersByTargetField[entry.targetField]) {
+          headersByTargetField[entry.targetField] = [];
+        }
+        headersByTargetField[entry.targetField].push(header);
+      }
+    }
+
+    function getMappedStr(
+      row: LeadRow,
+      targetField: string,
+      fallbackChineseHeaders: (keyof LeadRow)[],
+    ): string {
+      const headers = headersByTargetField[targetField] ?? [];
+      for (const header of headers) {
+        const v = (row as Record<string, unknown>)[header];
+        const s = toStr(v);
+        if (s) return s;
+      }
+      for (const key of fallbackChineseHeaders) {
+        const v = row[key];
+        const s = toStr(v);
+        if (s) return s;
+      }
+      return "";
+    }
+
+    const importSource =
+      typeof file.name === "string" && file.name.trim()
+        ? file.name.trim().slice(0, 100)
+        : undefined;
 
     rows.forEach((row: LeadRow, index: number) => {
       const rowNum = index + 1; // 记录序号，从1开始
-      const customerName = toStr(row.客户名称);
+      const customerName = getMappedStr(row, "customerName", ["客户名称"]);
       if (!customerName) {
         const message = "客户名称为空";
         errors.push({ row: rowNum, message });
@@ -138,13 +231,13 @@ export async function POST(req: Request) {
           message,
           data: {
             客户名称: customerName,
-            昵称: toStr(row.昵称) || undefined,
-            联系人: toStr(row.联系人) || undefined,
-            城市: toStr(row.城市) || undefined,
-            详细地址: toStr(row.详细地址) || undefined,
-            行业: toStr(row.行业) || undefined,
-            线索来源: toStr(row.线索来源) || undefined,
-            客户分层: toStr(row.客户分层) || undefined,
+            昵称: getMappedStr(row, "nickname", ["昵称"]) || undefined,
+            联系人: getMappedStr(row, "contactPerson", ["联系人"]) || undefined,
+            城市: getMappedStr(row, "city", ["城市"]) || undefined,
+            详细地址: getMappedStr(row, "address", ["详细地址"]) || undefined,
+            行业: getMappedStr(row, "industry", ["行业"]) || undefined,
+            线索来源: getMappedStr(row, "leadSource", ["线索来源"]) || undefined,
+            客户分层: getMappedStr(row, "customerTier", ["客户分层"]) || undefined,
             状态: "未跟进",
           },
         });
@@ -157,6 +250,11 @@ export async function POST(req: Request) {
       // 组装扩展字段：所有非规范表头、且有值的列
       const extraFields: Record<string, unknown> = {};
       for (const [key, value] of Object.entries(row)) {
+        // 映射为标准字段或显式忽略的列都不再进入 extraFields
+        const mapped = mapping?.[key];
+        if (mapped && (mapped.targetField === null || mapped.targetField)) {
+          continue;
+        }
         if (!CANONICAL_HEADERS.has(key)) {
           const str = toStr(value);
           if (str.length > 0) {
@@ -168,17 +266,30 @@ export async function POST(req: Request) {
 
       dataToInsert.push({
         customerName,
-        nickname: toStr(row.昵称) || undefined,
-        contactPerson: toStr(row.联系人) || undefined,
-        contactEmail: toStr(row.联系人邮箱) || undefined,
-        city: toStr(row.城市) || undefined,
-        address: toStr(row.详细地址) || undefined,
-        industry: toStr(row.行业) || undefined,
-        leadSource: toStr(row.线索来源) || undefined,
-        customerTier: toStr(row.客户分层) || undefined,
-        remark: toStr(row.备注) || undefined,
+        nickname: getMappedStr(row, "nickname", ["昵称"]) || undefined,
+        contactPerson: getMappedStr(row, "contactPerson", ["联系人"]) || undefined,
+        contactEmail: getMappedStr(row, "contactEmail", ["联系人邮箱"]) || undefined,
+        contactPhone:
+          getMappedStr(row, "contactPhone", [
+            "手机号",
+            "手机",
+            "手机号码",
+            "电话",
+            "电话号",
+            "联系电话",
+            "座机",
+            "传真",
+            "传真号",
+          ]) || undefined,
+        city: getMappedStr(row, "city", ["城市"]) || undefined,
+        address: getMappedStr(row, "address", ["详细地址"]) || undefined,
+        industry: getMappedStr(row, "industry", ["行业"]) || undefined,
+        leadSource: getMappedStr(row, "leadSource", ["线索来源"]) || undefined,
+        customerTier: getMappedStr(row, "customerTier", ["客户分层"]) || undefined,
+        remark: getMappedStr(row, "remark", ["备注"]) || undefined,
         salesPersonId: salesPersonId || undefined,
         status: "未跟进",
+        importSource,
         extraFields: extraCount > 0 ? (extraFields as Prisma.InputJsonValue) : undefined,
       });
 
@@ -187,13 +298,13 @@ export async function POST(req: Request) {
         status: "success",
         data: {
           客户名称: customerName,
-          昵称: toStr(row.昵称) || undefined,
-          联系人: toStr(row.联系人) || undefined,
-          城市: toStr(row.城市) || undefined,
-          详细地址: toStr(row.详细地址) || undefined,
-          行业: toStr(row.行业) || undefined,
-          线索来源: toStr(row.线索来源) || undefined,
-          客户分层: toStr(row.客户分层) || undefined,
+          昵称: getMappedStr(row, "nickname", ["昵称"]) || undefined,
+          联系人: getMappedStr(row, "contactPerson", ["联系人"]) || undefined,
+          城市: getMappedStr(row, "city", ["城市"]) || undefined,
+          详细地址: getMappedStr(row, "address", ["详细地址"]) || undefined,
+          行业: getMappedStr(row, "industry", ["行业"]) || undefined,
+          线索来源: getMappedStr(row, "leadSource", ["线索来源"]) || undefined,
+          客户分层: getMappedStr(row, "customerTier", ["客户分层"]) || undefined,
           预览销售人员: resolvedBatchSalesName ?? "未指定",
           状态: "未跟进",
           其他字段数: extraCount || undefined,
