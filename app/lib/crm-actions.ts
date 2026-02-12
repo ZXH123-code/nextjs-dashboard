@@ -44,11 +44,19 @@ import {
 } from "./crm";
 import { sendLeadAssignmentNotification } from "./email";
 
-// 创建线索（销售人员从下拉选择，未选则显示为未指定）
+// 创建线索：admin 可指定负责人，sales 新建时负责人固定为自己
 export async function createLeadAction(formData: FormData) {
+  const session = await auth();
+  const userId = (session?.user as { id?: string })?.id;
+  const role = (session?.user as { role?: string })?.role ?? "sales";
+  if (!userId) return { error: "请先登录" };
+
   const customerName = formData.get("customerName") as string;
   if (!customerName?.trim()) return { error: "客户名称必填" };
-  const salesPersonId = (formData.get("salesPersonId") as string) || undefined;
+  const salesPersonId =
+    role === "admin"
+      ? (formData.get("salesPersonId") as string) || undefined
+      : userId;
 
   await createLead({
     customerName: customerName.trim(),
@@ -70,45 +78,21 @@ export async function createLeadAction(formData: FormData) {
   redirect("/dashboard/crm/leads");
 }
 
-/** 新建一条空线索（仅 admin），用于表格内 Excel 风格补全 */
+/** 新建一条空线索，用于表格内直接增加一行并行内编辑。admin 可不指定负责人，sales 默认为自己 */
 export async function createEmptyLeadAction(): Promise<{ error?: string }> {
   const session = await auth();
+  const userId = (session?.user as { id?: string })?.id;
   const role = (session?.user as { role?: string })?.role ?? "sales";
-  if (role !== "admin") return { error: "权限不足" };
+  if (!userId) return { error: "请先登录" };
 
   await createLead({
     customerName: "（待补全）",
     status: "未跟进",
+    salesPersonId: role === "sales" ? userId : undefined,
   });
   revalidatePath("/dashboard/crm/leads");
   revalidatePath("/dashboard");
   return {};
-}
-
-// 更新线索状态（改为「有意向」后，自动创建商机）
-export async function updateLeadStatusAction(leadId: string, status: string) {
-  const session = await auth();
-  const userId = (session?.user as { id?: string })?.id;
-  const role = (session?.user as { role?: string })?.role ?? "sales";
-  if (!userId) return;
-  const lead = await prisma.crm_lead.findUnique({
-    where: { id: leadId, deletedAt: null }, // 已删除的线索不能更新状态
-    select: { salesPersonId: true }
-  });
-  if (!lead) return; // 线索不存在或已删除
-  if (!(await checkCrmPermission(userId, role, lead))) return; // 无权限静默跳过
-  await updateLeadStatus(leadId, status);
-  revalidatePath("/dashboard/crm/leads");
-  revalidatePath("/dashboard/crm/opportunities");
-  revalidatePath("/dashboard");
-}
-
-// 从表单更新线索状态（用于 select 的 form action）
-export async function updateLeadStatusFormAction(formData: FormData) {
-  const leadId = formData.get("leadId") as string;
-  const status = formData.get("status") as string;
-  if (!leadId || !status) return;
-  await updateLeadStatusAction(leadId, status);
 }
 
 // 编辑线索：admin 可编辑全部并修改负责人，sales 仅可编辑自己负责的线索（不可改负责人）
@@ -767,13 +751,20 @@ export async function createFollowUpAction(prevState: { error?: string } | null,
   if (!followDate) return { error: "跟进日期必填" };
   if (!followUpById) return { error: "无法获取跟进人，请先登录或确保数据库中有用户" };
 
+  const leadId = (formData.get("leadId") as string)?.trim() || undefined;
+  const customerId = (formData.get("customerId") as string)?.trim() || undefined;
+  const opportunityId = (formData.get("opportunityId") as string)?.trim() || undefined;
+  if (!leadId && !customerId && !opportunityId) {
+    return { error: "请至少选择关联的线索、商机或客户之一" };
+  }
+
   const created = await createFollowUp({
     content: content.trim(),
     followUpById,
     followDate: new Date(followDate),
-    leadId: (formData.get("leadId") as string) || undefined,
-    customerId: (formData.get("customerId") as string) || undefined,
-    opportunityId: (formData.get("opportunityId") as string) || undefined,
+    leadId,
+    customerId,
+    opportunityId,
     contactPerson: (formData.get("contactPerson") as string) || undefined,
     summary: (formData.get("summary") as string) || undefined,
     nextStep: (formData.get("nextStep") as string) || undefined,
@@ -1201,6 +1192,9 @@ export async function createManualFollowUpAction(data: {
   const session = await auth();
   const userId = (session?.user as { id?: string })?.id;
   if (!userId) return { error: "未登录" };
+  if (!data.leadId && !data.customerId && !data.opportunityId) {
+    return { error: "请至少选择关联的线索、商机或客户之一" };
+  }
 
   const created = await createFollowUp({
     content: data.content.trim(),

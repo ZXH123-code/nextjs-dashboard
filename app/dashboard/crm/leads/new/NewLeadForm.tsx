@@ -18,7 +18,15 @@ async function wrapAction(
   return result ?? null;
 }
 
-export function NewLeadForm({ users }: { users: User[] }) {
+export function NewLeadForm({
+  users,
+  isAdmin = false,
+  currentUserId,
+}: {
+  users: User[];
+  isAdmin?: boolean;
+  currentUserId?: string;
+}) {
   const [state, setStateAction] = useActionState(wrapAction, null);
 
   return (
@@ -90,18 +98,22 @@ export function NewLeadForm({ users }: { users: User[] }) {
           className="min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         />
       </div>
-      <div className="space-y-2">
-        <Label>销售人员</Label>
-        <FormSelect
-          name="salesPersonId"
-          value=""
-          options={[
-            { value: "", label: "未指定" },
-            ...users.map((u) => ({ value: u.id, label: u.name })),
-          ]}
-          placeholder="选择销售人员"
-        />
-      </div>
+      {isAdmin ? (
+        <div className="space-y-2">
+          <Label>销售人员</Label>
+          <FormSelect
+            name="salesPersonId"
+            value=""
+            options={[
+              { value: "", label: "未指定" },
+              ...users.map((u) => ({ value: u.id, label: u.name })),
+            ]}
+            placeholder="选择销售人员"
+          />
+        </div>
+      ) : (
+        currentUserId && <input type="hidden" name="salesPersonId" value={currentUserId} readOnly />
+      )}
       <div className="space-y-2">
         <Label>状态</Label>
         <FormSelect

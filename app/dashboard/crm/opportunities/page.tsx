@@ -1,11 +1,12 @@
 import { getOpportunities, getCrmAuth, getUsers } from "@/app/lib/crm";
 import { OpportunitiesTable } from "./OpportunitiesTable";
+import { Pagination } from "@/components/ui/pagination";
 import Link from "next/link";
 import { lusitana } from "@/app/ui/fonts";
 import { ArrowLeft } from "lucide-react";
 import { auth } from "@/auth";
 
-type SearchParams = { highlight?: string; leadId?: string };
+type SearchParams = { highlight?: string; leadId?: string; page?: string; pageSize?: string };
 
 export default async function OpportunitiesPage({
   searchParams,
@@ -13,17 +14,27 @@ export default async function OpportunitiesPage({
   searchParams: Promise<SearchParams>;
 }) {
   const params = await searchParams;
+  const page = Math.max(1, parseInt(params.page ?? "1", 10) || 1);
+  const pageSize = Math.max(1, Math.min(100, parseInt(params.pageSize ?? "20", 10) || 20));
 
-  let opportunities: Awaited<ReturnType<typeof getOpportunities>> = [];
+  let opportunities: Awaited<ReturnType<typeof getOpportunities>>["items"] = [];
+  let total = 0;
   let users: Awaited<ReturnType<typeof getUsers>> = [];
   let currentUserRole = "sales";
   let currentUserId: string | undefined;
   try {
     const crmAuth = await getCrmAuth();
-    [opportunities, users] = await Promise.all([
-      getOpportunities(crmAuth),
+    const [oppsRes, usersList] = await Promise.all([
+      getOpportunities(crmAuth, {
+        page,
+        pageSize,
+        leadId: params.leadId ?? undefined,
+      }),
       getUsers(),
     ]);
+    opportunities = oppsRes.items;
+    total = oppsRes.total;
+    users = usersList;
 
     const session = await auth();
     currentUserRole = (session?.user as { role?: string })?.role ?? "sales";
@@ -32,13 +43,7 @@ export default async function OpportunitiesPage({
     console.error("获取商机失败:", e);
   }
 
-  // leadId：从线索详情等进入时只显示该线索下的商机；无则显示全部。highlight 仅用于表格内高亮+滚动，不筛列表
-  let filteredOpps = opportunities;
-  if (params.leadId && !params.highlight) {
-    filteredOpps = opportunities.filter((o) => o.leadId === params.leadId);
-  }
-
-  const serializedOpps = filteredOpps.map((o) => ({
+  const serializedOpps = opportunities.map((o) => ({
     ...o,
     amount: o.amount != null ? Number(o.amount) : null,
   }));
@@ -49,7 +54,7 @@ export default async function OpportunitiesPage({
         <h1 className={`${lusitana.className} text-xl md:text-2xl`}>商机管理表</h1>
       </div>
 
-      {params.leadId && !params.highlight && filteredOpps.length > 0 && (
+      {params.leadId && !params.highlight && opportunities.length > 0 && (
         <div className="mb-4 flex items-center gap-3 rounded-lg border bg-muted/50 px-4 py-3">
           <span className="text-sm font-medium">当前筛选：该线索下的商机</span>
           <Link
@@ -68,6 +73,15 @@ export default async function OpportunitiesPage({
         currentUserId={currentUserId}
         users={users}
         highlightId={params.highlight}
+      />
+
+      <Pagination
+        basePath="/dashboard/crm/opportunities"
+        currentPage={page}
+        totalPages={Math.ceil(total / pageSize)}
+        total={total}
+        pageSize={pageSize}
+        preserveParams={{ highlight: params.highlight, leadId: params.leadId }}
       />
 
       <p className="mt-4 text-sm text-muted-foreground">

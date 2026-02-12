@@ -1,9 +1,10 @@
 import { getFollowUps, getCrmAuth } from "@/app/lib/crm";
 import { prisma } from "@/app/lib/prisma";
+import { Pagination } from "@/components/ui/pagination";
 import Link from "next/link";
 import { lusitana } from "@/app/ui/fonts";
 
-type SearchParams = { leadId?: string; customerId?: string; opportunityId?: string };
+type SearchParams = { leadId?: string; customerId?: string; opportunityId?: string; page?: string; pageSize?: string };
 
 export default async function FollowUpsPage({
   searchParams,
@@ -11,6 +12,8 @@ export default async function FollowUpsPage({
   searchParams: Promise<SearchParams>;
 }) {
   const params = await searchParams;
+  const page = Math.max(1, parseInt(params.page ?? "1", 10) || 1);
+  const pageSize = Math.max(1, Math.min(100, parseInt(params.pageSize ?? "20", 10) || 20));
   const filters =
     params.leadId || params.customerId || params.opportunityId
       ? {
@@ -20,13 +23,18 @@ export default async function FollowUpsPage({
         }
       : undefined;
 
-  let followUps: Awaited<ReturnType<typeof getFollowUps>> = [];
+  let followUps: Awaited<ReturnType<typeof getFollowUps>>["items"] = [];
+  let total = 0;
   try {
     const auth = await getCrmAuth();
-    followUps = await getFollowUps(auth, filters);
+    const res = await getFollowUps(auth, filters, { page, pageSize });
+    followUps = res.items;
+    total = res.total;
   } catch (e) {
     console.error("获取跟进记录失败:", e);
   }
+
+  const totalPages = Math.ceil(total / pageSize);
 
   // 获取筛选条件的可读名称（线索名、客户名、商机名）
   let filterLabel: string | null = null;
@@ -77,7 +85,7 @@ export default async function FollowUpsPage({
         </p>
       )}
 
-      <div className="rounded-lg border bg-card">
+      <div className="rounded-lg border bg-card overflow-hidden">
         <table className="w-full text-left text-sm">
           <thead className="border-b bg-muted/50">
             <tr>
@@ -114,6 +122,19 @@ export default async function FollowUpsPage({
             )}
           </tbody>
         </table>
+
+        <Pagination
+          basePath="/dashboard/crm/follow-ups"
+          currentPage={page}
+          totalPages={totalPages}
+          total={total}
+          pageSize={pageSize}
+          preserveParams={{
+            leadId: params.leadId,
+            customerId: params.customerId,
+            opportunityId: params.opportunityId,
+          }}
+        />
       </div>
 
       <p className="mt-4 text-sm text-muted-foreground">

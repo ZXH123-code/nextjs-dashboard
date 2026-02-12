@@ -878,7 +878,7 @@ export function LeadsTableWithBulk({
                     colSpan={13}
                     className="px-4 py-8 text-center text-muted-foreground"
                   >
-                    暂无数据，仅管理员可点击「新建线索」添加一条空记录后在表格内编辑
+                    暂无数据，点击「新建线索」增加一行后在表格内编辑
                   </td>
                 </tr>
               ) : filteredData.length === 0 ? (

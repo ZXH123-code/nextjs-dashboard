@@ -73,18 +73,37 @@ export async function getCrmCounts(auth: CrmAuth) {
 }
 
 // ============ 线索 ============
-export async function getLeads(auth: CrmAuth, includeDeleted = false) {
+export type GetLeadsOptions = { includeDeleted?: boolean; page?: number; pageSize?: number };
+
+export async function getLeads(
+  auth: CrmAuth,
+  options: GetLeadsOptions = {}
+): Promise<{ items: Awaited<ReturnType<typeof prisma.crm_lead.findMany>>; total: number }> {
+  const { includeDeleted = false, page, pageSize } = options;
   const where = buildLeadWhere(auth, includeDeleted);
-  return prisma.crm_lead.findMany({
-    where,
-    orderBy: [{ isKeyFocus: "desc" }, { createdAt: "desc" }],
-    include: {
-      salesPerson: { select: { id: true, name: true } },
-      opportunity: {
-        select: { id: true, name: true, customer: { select: { id: true, status: true } } },
-      },
+  const orderBy = [{ isKeyFocus: "desc" as const }, { createdAt: "desc" as const }];
+  const include = {
+    salesPerson: { select: { id: true, name: true } },
+    opportunity: {
+      select: { id: true, name: true, customer: { select: { id: true, status: true } } },
     },
-  });
+  };
+
+  if (page != null && pageSize != null && page >= 1 && pageSize >= 1) {
+    const [items, total] = await Promise.all([
+      prisma.crm_lead.findMany({
+        where,
+        orderBy,
+        include,
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+      prisma.crm_lead.count({ where }),
+    ]);
+    return { items, total };
+  }
+  const items = await prisma.crm_lead.findMany({ where, orderBy, include });
+  return { items, total: items.length };
 }
 
 /**
@@ -202,7 +221,7 @@ export async function updateLead(
     isKeyFocus?: boolean;
   }
 ) {
-  return prisma.crm_lead.update({
+  const updated = await prisma.crm_lead.update({
     where: { id },
     data: {
       ...(data.customerName != null && { customerName: data.customerName }),
@@ -221,6 +240,11 @@ export async function updateLead(
       ...(data.isKeyFocus !== undefined && { isKeyFocus: data.isKeyFocus }),
     },
   });
+  // 统一保证：只要状态被改为「有意向」，必有商机（编辑页、表单等任意入口）
+  if (data.status === "有意向") {
+    await ensureLeadHasOpportunityIfIntent(id);
+  }
+  return updated;
 }
 
 /**
@@ -288,10 +312,15 @@ export async function deleteLead(id: string) {
   return prisma.crm_lead.delete({ where: { id } });
 }
 
-/** 管理员强制删除线索：级联删除关联的商机、客户，并解除跟进记录关联 */
+/**
+ * 管理员强制删除线索：级联删除关联的商机、客户，并解除跟进记录关联。
+ * 按 id 查询（不限制 deletedAt），以便同时支持：
+ * - 回收站内「彻底删除」已软删除的线索；
+ * - 批量「清理 N 天前已删除线索」时物理删除已软删除的记录。
+ */
 export async function deleteLeadWithCascade(leadId: string) {
   const lead = await prisma.crm_lead.findUnique({
-    where: { id: leadId, deletedAt: null }, // 只查询未删除的记录
+    where: { id: leadId },
     select: {
       id: true,
       opportunity: {
@@ -360,23 +389,42 @@ export async function deleteLeadWithCascade(leadId: string) {
 }
 
 // ============ 商机 ============
-export async function getOpportunities(auth: CrmAuth) {
-  const where = !auth ? emptyWhere : auth.role === "admin" ? {} : salesFilter(auth.userId);
-  const rows = await prisma.crm_opportunity.findMany({
-    where,
-    orderBy: [{ isKeyFocus: "desc" }, { createdAt: "desc" }],
-    include: {
-      lead: { select: { id: true, customerName: true, contactPhone: true } },
-      salesPerson: { select: { id: true, name: true } },
-      deliveryPerson: { select: { id: true, name: true } },
-      customer: { select: { id: true, name: true } },
-    },
-  });
-  // Prisma Decimal 无法直接传给 Client Component，这里统一转成普通 number
-  return rows.map((o) => ({
-    ...o,
-    amount: o.amount != null ? Number(o.amount) : null,
-  }));
+export type GetOpportunitiesOptions = { page?: number; pageSize?: number; leadId?: string };
+export async function getOpportunities(
+  auth: CrmAuth,
+  options: GetOpportunitiesOptions = {}
+): Promise<{ items: (Omit<Awaited<ReturnType<typeof prisma.crm_opportunity.findMany>>[number], "amount"> & { amount: number | null })[]; total: number }> {
+  const { page, pageSize, leadId } = options;
+  let where = !auth ? emptyWhere : auth.role === "admin" ? {} : salesFilter(auth.userId);
+  if (leadId) {
+    where = { ...where, leadId };
+  }
+  const orderBy = [{ isKeyFocus: "desc" as const }, { createdAt: "desc" as const }];
+  const include = {
+    lead: { select: { id: true, customerName: true, contactPhone: true } },
+    salesPerson: { select: { id: true, name: true } },
+    deliveryPerson: { select: { id: true, name: true } },
+    customer: { select: { id: true, name: true } },
+  };
+
+  const mapAmount = (rows: Awaited<ReturnType<typeof prisma.crm_opportunity.findMany>>) =>
+    rows.map((o) => ({ ...o, amount: o.amount != null ? Number(o.amount) : null }));
+
+  if (page != null && pageSize != null && page >= 1 && pageSize >= 1) {
+    const [rows, total] = await Promise.all([
+      prisma.crm_opportunity.findMany({
+        where,
+        orderBy,
+        include,
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+      prisma.crm_opportunity.count({ where }),
+    ]);
+    return { items: mapAmount(rows), total };
+  }
+  const rows = await prisma.crm_opportunity.findMany({ where, orderBy, include });
+  return { items: mapAmount(rows), total: rows.length };
 }
 
 export async function createOpportunity(data: {
@@ -461,27 +509,43 @@ export async function updateOpportunityStatus(id: string, status: string, lostRe
 }
 
 // ============ 客户 ============
-export async function getCustomers(auth: CrmAuth) {
+export type GetCustomersOptions = { page?: number; pageSize?: number };
+export async function getCustomers(
+  auth: CrmAuth,
+  options: GetCustomersOptions = {}
+): Promise<{ items: (Omit<Awaited<ReturnType<typeof prisma.crm_customer.findMany>>[number], "actualAmount"> & { actualAmount: number | null })[]; total: number }> {
+  const { page, pageSize } = options;
   const where = !auth ? emptyWhere : auth.role === "admin" ? {} : salesFilter(auth.userId);
-  const rows = await prisma.crm_customer.findMany({
-    where,
-    orderBy: [{ isKeyFocus: "desc" }, { createdAt: "desc" }],
-    include: {
-      opportunity: {
-        select: {
-          id: true,
-          name: true,
-          lead: { select: { id: true, contactPhone: true } }
-        }
+  const orderBy = [{ isKeyFocus: "desc" as const }, { createdAt: "desc" as const }];
+  const include = {
+    opportunity: {
+      select: {
+        id: true,
+        name: true,
+        lead: { select: { id: true, contactPhone: true } },
       },
-      salesPerson: { select: { id: true, name: true } },
     },
-  });
-  // 同样将 Decimal 类型的 actualAmount 转成普通 number，避免传给 Client Component 报错
-  return rows.map((c) => ({
-    ...c,
-    actualAmount: c.actualAmount != null ? Number(c.actualAmount) : null,
-  }));
+    salesPerson: { select: { id: true, name: true } },
+  };
+
+  const mapAmount = (rows: Awaited<ReturnType<typeof prisma.crm_customer.findMany>>) =>
+    rows.map((c) => ({ ...c, actualAmount: c.actualAmount != null ? Number(c.actualAmount) : null }));
+
+  if (page != null && pageSize != null && page >= 1 && pageSize >= 1) {
+    const [rows, total] = await Promise.all([
+      prisma.crm_customer.findMany({
+        where,
+        orderBy,
+        include,
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+      prisma.crm_customer.count({ where }),
+    ]);
+    return { items: mapAmount(rows), total };
+  }
+  const rows = await prisma.crm_customer.findMany({ where, orderBy, include });
+  return { items: mapAmount(rows), total: rows.length };
 }
 
 export async function createCustomer(data: {
@@ -617,15 +681,20 @@ export async function deleteCustomers(customerIds: string[]) {
 
 // ============ 跟进记录 ============
 /** 跟进记录列表。无 filters 时：admin 看全部，sales 仅看自己跟进或自己负责的线索/商机/客户的记录 */
+export type GetFollowUpsOptions = { page?: number; pageSize?: number };
 export async function getFollowUps(
   auth: CrmAuth,
-  filters?: { leadId?: string; customerId?: string; opportunityId?: string }
-) {
+  filters?: { leadId?: string; customerId?: string; opportunityId?: string },
+  options: GetFollowUpsOptions = {}
+): Promise<{
+  items: Awaited<ReturnType<typeof prisma.crm_follow_up.findMany>>;
+  total: number;
+}> {
+  const { page, pageSize } = options;
   let where: Record<string, unknown> = filters ?? {};
   if (!auth) {
     where = { ...where, id: "00000000-0000-0000-0000-000000000000" };
   } else if (auth.role === "sales" && auth.userId) {
-    // 销售人员：只看自己跟进的，或关联的线索/客户/商机是自己负责的
     where = {
       ...where,
       OR: [
@@ -636,16 +705,29 @@ export async function getFollowUps(
       ],
     };
   }
-  return prisma.crm_follow_up.findMany({
-    where,
-    orderBy: { followDate: "desc" },
-    include: {
-      followUpBy: { select: { id: true, name: true } },
-      lead: { select: { id: true, customerName: true } },
-      customer: { select: { id: true, name: true } },
-      opportunity: { select: { id: true, name: true } },
-    },
-  });
+  const orderBy = { followDate: "desc" as const };
+  const include = {
+    followUpBy: { select: { id: true, name: true } },
+    lead: { select: { id: true, customerName: true } },
+    customer: { select: { id: true, name: true } },
+    opportunity: { select: { id: true, name: true } },
+  };
+
+  if (page != null && pageSize != null && page >= 1 && pageSize >= 1) {
+    const [items, total] = await Promise.all([
+      prisma.crm_follow_up.findMany({
+        where,
+        orderBy,
+        include,
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+      prisma.crm_follow_up.count({ where }),
+    ]);
+    return { items, total };
+  }
+  const items = await prisma.crm_follow_up.findMany({ where, orderBy, include });
+  return { items, total: items.length };
 }
 
 export async function createFollowUp(data: {
@@ -663,6 +745,9 @@ export async function createFollowUp(data: {
   isSystemGenerated?: boolean; // 是否为系统自动生成（状态变更时）
   transitionType?: string | null; // lead_to_opportunity | opportunity_to_customer，删除该条时联动撤回
 }) {
+  if (!data.leadId && !data.customerId && !data.opportunityId) {
+    throw new Error("跟进记录至少关联线索、商机或客户之一");
+  }
   return prisma.crm_follow_up.create({
     data: {
       content: data.content,
@@ -864,7 +949,7 @@ export async function rollbackFollowUpTransition(row: {
     if (opp) {
       await prisma.crm_opportunity.update({
         where: { id: opportunityId },
-        data: { status: "需求确认" },
+        data: { status: "方案确认" },
       });
     }
   }
@@ -887,6 +972,24 @@ export async function deleteFollowUp(id: string) {
 }
 
 // ============ 状态流转（核心逻辑） ============
+
+/**
+ * 若线索状态为「有意向」且尚未有关联商机，则创建商机；否则不操作（幂等）。
+ * 用于在任意入口把状态改为「有意向」后统一保证数据一致（如编辑页、updateLead 等）。
+ */
+export async function ensureLeadHasOpportunityIfIntent(leadId: string) {
+  try {
+    await leadToOpportunity(leadId);
+  } catch (e) {
+    // 已有商机或状态非有意向时 leadToOpportunity 会抛，忽略即可
+    if (
+      !(e instanceof Error) ||
+      (!e.message.includes("已转入商机") && !e.message.includes("仅当线索状态"))
+    ) {
+      throw e;
+    }
+  }
+}
 
 /** 线索转商机：当状态变为「有意向」时调用 */
 export async function leadToOpportunity(leadId: string) {
@@ -1068,11 +1171,11 @@ export async function getNotificationsForUser(auth: CrmAuth, limit = 50) {
     auth.role === "admin"
       ? {}
       : {
-          OR: [
-            { oldSalesPersonId: auth.userId },
-            { newSalesPersonId: auth.userId },
-          ],
-        };
+        OR: [
+          { oldSalesPersonId: auth.userId },
+          { newSalesPersonId: auth.userId },
+        ],
+      };
 
   return prisma.crm_lead_assignment_notification.findMany({
     where,

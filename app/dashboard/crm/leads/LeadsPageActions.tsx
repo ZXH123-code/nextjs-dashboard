@@ -35,14 +35,6 @@ export function LeadsPageActions({ isAdmin }: { isAdmin: boolean }) {
   };
 
   const handleNewLead = async () => {
-    if (!isAdmin) {
-      setPermissionDialog({
-        open: true,
-        title: "暂无操作权限",
-        description: "仅管理员可新建线索。如需添加线索，请联系管理员。",
-      });
-      return;
-    }
     setCreating(true);
     try {
       const result = await createEmptyLeadAction();

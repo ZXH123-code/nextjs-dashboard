@@ -1,10 +1,11 @@
 import { getCustomers, getCrmAuth } from "@/app/lib/crm";
 import { CustomersTable } from "./CustomersTable";
+import { Pagination } from "@/components/ui/pagination";
 import Link from "next/link";
 import { lusitana } from "@/app/ui/fonts";
 import { auth } from "@/auth";
 
-type SearchParams = { highlight?: string };
+type SearchParams = { highlight?: string; page?: string; pageSize?: string };
 
 export default async function CustomersPage({
   searchParams,
@@ -12,19 +13,26 @@ export default async function CustomersPage({
   searchParams: Promise<SearchParams>;
 }) {
   const params = await searchParams;
+  const page = Math.max(1, parseInt(params.page ?? "1", 10) || 1);
+  const pageSize = Math.max(1, Math.min(100, parseInt(params.pageSize ?? "20", 10) || 20));
 
-  let customers: Awaited<ReturnType<typeof getCustomers>> = [];
+  let customers: Awaited<ReturnType<typeof getCustomers>>["items"] = [];
+  let total = 0;
   let currentUserRole = "sales";
   let currentUserId: string | undefined;
   try {
     const crmAuth = await getCrmAuth();
-    customers = await getCustomers(crmAuth);
+    const customersRes = await getCustomers(crmAuth, { page, pageSize });
+    customers = customersRes.items;
+    total = customersRes.total;
     const session = await auth();
     currentUserRole = (session?.user as { role?: string })?.role ?? "sales";
     currentUserId = (session?.user as { id?: string })?.id;
   } catch (e) {
     console.error("获取客户失败:", e);
   }
+
+  const totalPages = Math.ceil(total / pageSize);
 
   return (
     <main className="p-6 md:p-8">
@@ -44,6 +52,15 @@ export default async function CustomersPage({
         currentUserId={currentUserId}
         isAdmin={currentUserRole === "admin"}
         highlightId={params.highlight}
+      />
+
+      <Pagination
+        basePath="/dashboard/crm/customers"
+        currentPage={page}
+        totalPages={totalPages}
+        total={total}
+        pageSize={pageSize}
+        preserveParams={{ highlight: params.highlight }}
       />
 
       <p className="mt-4 text-sm text-muted-foreground">

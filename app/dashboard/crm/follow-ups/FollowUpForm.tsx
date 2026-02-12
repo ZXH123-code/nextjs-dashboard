@@ -1,15 +1,16 @@
 "use client";
 
-import { useActionState, useState, useMemo, useEffect, useRef } from "react";
+import { useState, FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { createFollowUpAction } from "@/app/lib/crm-actions";
 import Link from "next/link";
 import { Label } from "@/components/ui/label";
 import { FormSelect } from "@/components/ui/form-select";
+import { User, Briefcase, Users } from "lucide-react";
 
 type Lead = { id: string; customerName: string };
-type Customer = { id: string; name: string; opportunityId: string | null };
-type Opportunity = { id: string; name: string; customerId: string | null };
+type Customer = { id: string; name: string; opportunityId: string | null; leadId: string | null };
+type Opportunity = { id: string; name: string; customerId: string | null; leadId: string | null };
 
 async function uploadFollowUpImage(followUpId: string, file: File): Promise<void> {
   const formData = new FormData();
@@ -24,6 +25,8 @@ async function uploadFollowUpImage(followUpId: string, file: File): Promise<void
   }
 }
 
+type LinkType = "customer" | "opportunity" | "lead";
+
 export function FollowUpForm({
   leads,
   customers,
@@ -34,150 +37,315 @@ export function FollowUpForm({
   opportunities: Opportunity[];
 }) {
   const router = useRouter();
-  const [state, formAction, isPending] = useActionState(createFollowUpAction, null);
-  const [leadId, setLeadId] = useState("");
+  const [isPending, setIsPending] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [linkType, setLinkType] = useState<LinkType>("customer");
   const [customerId, setCustomerId] = useState("");
   const [opportunityId, setOpportunityId] = useState("");
+  const [leadId, setLeadId] = useState("");
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
-  const [uploadError, setUploadError] = useState<string | null>(null);
-  const hasRedirected = useRef(false);
 
-  // 选择线索后：自动清空商机和客户（线索和商机/客户是不同阶段的记录）
-  const handleLeadChange = (val: string) => {
-    setLeadId(val);
-    if (val) {
-      // 选了线索后，建议不要同时选商机/客户
-      // 但不强制清空，给用户自由度
-    }
-  };
-
-  // 选客户后：商机仅显示该客户的来源商机
-  const filteredOpportunities = useMemo(() => {
-    if (!customerId) return opportunities;
-    const cust = customers.find((c) => c.id === customerId);
-    if (!cust?.opportunityId) return [];
-    const opp = opportunities.find((o) => o.id === cust.opportunityId);
-    return opp ? [opp] : [];
-  }, [customerId, customers, opportunities]);
-
-  // 选商机后：自动带出对应客户
-  const handleOpportunityChange = (val: string) => {
-    setOpportunityId(val);
-    if (val) {
-      const opp = opportunities.find((o) => o.id === val);
-      if (opp?.customerId) {
-        setCustomerId(opp.customerId);
-      }
-    } else {
-      setCustomerId("");
-    }
-  };
-
-  // 选客户后：自动带出对应商机
+  // 选客户 → 自动带出商机、线索
   const handleCustomerChange = (val: string) => {
     setCustomerId(val);
     if (val) {
-      const cust = customers.find((c) => c.id === val);
-      if (cust?.opportunityId) {
-        setOpportunityId(cust.opportunityId);
-      } else {
-        setOpportunityId("");
-      }
+      const c = customers.find((x) => x.id === val);
+      setOpportunityId(c?.opportunityId ?? "");
+      setLeadId(c?.leadId ?? "");
     } else {
       setOpportunityId("");
+      setLeadId("");
     }
   };
 
-  const leadOptions = [
-    { value: "", label: "无" },
-    ...leads.map((l) => ({ value: l.id, label: l.customerName })),
-  ];
+  // 选商机 → 自动带出客户（若有）、线索
+  const handleOpportunityChange = (val: string) => {
+    setOpportunityId(val);
+    setCustomerId("");
+    if (val) {
+      const o = opportunities.find((x) => x.id === val);
+      setCustomerId(o?.customerId ?? "");
+      setLeadId(o?.leadId ?? "");
+    } else {
+      setLeadId("");
+    }
+  };
+
+  // 选线索 → 仅线索
+  const handleLeadChange = (val: string) => {
+    setLeadId(val);
+    setCustomerId("");
+    setOpportunityId("");
+  };
+
   const customerOptions = [
-    { value: "", label: "无" },
+    { value: "", label: "请选择客户" },
     ...customers.map((c) => ({ value: c.id, label: c.name })),
   ];
   const opportunityOptions = [
-    { value: "", label: "无" },
-    ...filteredOpportunities.map((o) => ({ value: o.id, label: o.name })),
+    { value: "", label: "请选择商机" },
+    ...opportunities.map((o) => ({ value: o.id, label: o.name })),
+  ];
+  const leadOptions = [
+    { value: "", label: "请选择线索" },
+    ...leads.map((l) => ({ value: l.id, label: l.customerName })),
   ];
 
-  // 提交成功后：若有图片则先上传再跳转，否则直接跳转
-  useEffect(() => {
-    const result = state as { success?: boolean; followUpId?: string } | null;
-    if (!result?.followUpId || hasRedirected.current) return;
-    hasRedirected.current = true;
+  const selectedCustomer = customerId ? customers.find((c) => c.id === customerId) : null;
+  const selectedOpportunity = opportunityId ? opportunities.find((o) => o.id === opportunityId) : null;
+  const selectedLead = leadId ? leads.find((l) => l.id === leadId) : null;
+  const hasLink = !!(customerId || opportunityId || leadId);
+
+  const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!hasLink || isPending) return;
+    setSaveError(null);
     setUploadError(null);
-
-    if (selectedFiles.length === 0) {
-      router.push("/dashboard/crm/follow-ups");
-      return;
-    }
-
-    (async () => {
-      try {
-        for (const file of selectedFiles) {
-          await uploadFollowUpImage(result.followUpId!, file);
+    setIsPending(true);
+    try {
+      const form = e.currentTarget;
+      const formData = new FormData(form);
+      const result = await createFollowUpAction(null, formData);
+      if (result?.error) {
+        setSaveError(result.error);
+        return;
+      }
+      if (result?.success && result?.followUpId) {
+        if (selectedFiles.length > 0) {
+          try {
+            for (const file of selectedFiles) {
+              await uploadFollowUpImage(result.followUpId, file);
+            }
+          } catch (err) {
+            setUploadError(err instanceof Error ? err.message : "上传图片失败");
+            return;
+          }
         }
         router.push("/dashboard/crm/follow-ups");
-      } catch (e) {
-        setUploadError(e instanceof Error ? e.message : "上传图片失败");
-        hasRedirected.current = false;
       }
-    })();
-  }, [state, selectedFiles.length, router]);
+    } finally {
+      setIsPending(false);
+    }
+  };
 
   return (
-    <form action={formAction} className="max-w-xl space-y-4 rounded-lg border bg-card p-6">
-      {state?.error && (
-        <div className="rounded-md bg-destructive/10 px-4 py-3 text-sm text-destructive">
-          {state.error}
+    <form onSubmit={handleSubmit} className="space-y-8">
+      <input type="hidden" name="leadId" value={leadId} readOnly />
+      <input type="hidden" name="customerId" value={customerId} readOnly />
+      <input type="hidden" name="opportunityId" value={opportunityId} readOnly />
+
+      {saveError && (
+        <div className="rounded-lg border border-destructive/50 bg-destructive/10 px-4 py-3 text-sm text-destructive" role="alert">
+          <p className="font-medium">保存失败</p>
+          <p className="mt-1">{saveError}</p>
         </div>
       )}
       {uploadError && (
-        <div className="rounded-md bg-destructive/10 px-4 py-3 text-sm text-destructive">
-          {uploadError}
+        <div className="rounded-lg border border-destructive/50 bg-destructive/10 px-4 py-3 text-sm text-destructive" role="alert">
+          <p className="font-medium">上传图片失败</p>
+          <p className="mt-1">{uploadError}</p>
         </div>
       )}
-      
-      {/* 跟进内容 */}
-      <div>
-        <label className="mb-1 block text-sm font-medium">跟进内容 *</label>
-        <textarea
-          name="content"
-          required
-          rows={4}
-          disabled={isPending}
-          className="w-full rounded-md border px-3 py-2"
-          placeholder="请输入跟进记录内容"
-        />
-      </div>
 
-      {/* 跟进日期 */}
-      <div>
-        <label className="mb-1 block text-sm font-medium">跟进日期 *</label>
-        <input
-          name="followDate"
-          type="date"
-          required
-          disabled={isPending}
-          defaultValue={new Date().toISOString().slice(0, 10)}
-          className="w-full rounded-md border px-3 py-2"
-        />
-      </div>
+      {/* 第一步：关联对象（先客户 → 商机 → 线索） */}
+      <section className="rounded-xl border bg-card p-6 shadow-sm">
+        <div className="mb-4">
+          <h2 className="text-base font-semibold text-foreground">关联对象</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            先选客户（选后自动带出商机、线索）；若无客户再选商机；都没有则选线索。至少选一个。
+          </p>
+        </div>
 
-      {/* 上传图片（可选，不随 form 提交，提交成功后按 followUpId 再上传） */}
-      <div>
-        <label className="mb-1 block text-sm font-medium">上传图片（可选）</label>
+        <div className="flex flex-wrap gap-2 mb-4">
+          <button
+            type="button"
+            onClick={() => setLinkType("customer")}
+            className={`inline-flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium transition-colors ${
+              linkType === "customer"
+                ? "border-primary bg-primary text-primary-foreground"
+                : "border-input bg-background hover:bg-muted/50"
+            }`}
+          >
+            <Users className="h-4 w-4" />
+            先选客户
+          </button>
+          <button
+            type="button"
+            onClick={() => setLinkType("opportunity")}
+            className={`inline-flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium transition-colors ${
+              linkType === "opportunity"
+                ? "border-primary bg-primary text-primary-foreground"
+                : "border-input bg-background hover:bg-muted/50"
+            }`}
+          >
+            <Briefcase className="h-4 w-4" />
+            再选商机
+          </button>
+          <button
+            type="button"
+            onClick={() => setLinkType("lead")}
+            className={`inline-flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium transition-colors ${
+              linkType === "lead"
+                ? "border-primary bg-primary text-primary-foreground"
+                : "border-input bg-background hover:bg-muted/50"
+            }`}
+          >
+            <User className="h-4 w-4" />
+            最后选线索
+          </button>
+        </div>
+
+        <div className="space-y-2">
+          {linkType === "customer" && (
+            <>
+              <Label>选择客户</Label>
+              <FormSelect
+                name=""
+                value={customerId}
+                options={customerOptions}
+                placeholder="选择客户后，商机与线索将自动带出"
+                disabled={isPending}
+                onValueChange={handleCustomerChange}
+                className="max-w-md"
+              />
+            </>
+          )}
+          {linkType === "opportunity" && (
+            <>
+              <Label>选择商机</Label>
+              <FormSelect
+                name=""
+                value={opportunityId}
+                options={opportunityOptions}
+                placeholder="选择商机后，线索将自动带出"
+                disabled={isPending}
+                onValueChange={handleOpportunityChange}
+                className="max-w-md"
+              />
+            </>
+          )}
+          {linkType === "lead" && (
+            <>
+              <Label>选择线索</Label>
+              <FormSelect
+                name=""
+                value={leadId}
+                options={leadOptions}
+                placeholder="选择线索"
+                disabled={isPending}
+                onValueChange={handleLeadChange}
+                className="max-w-md"
+              />
+            </>
+          )}
+        </div>
+
+        {hasLink && (
+          <div className="mt-4 rounded-lg bg-muted/50 px-4 py-3 text-sm text-muted-foreground">
+            <span className="font-medium text-foreground">已关联：</span>
+            {selectedCustomer && <span>客户 {selectedCustomer.name}</span>}
+            {selectedOpportunity && (
+              <span>{selectedCustomer ? " → " : ""}商机 {selectedOpportunity.name}</span>
+            )}
+            {selectedLead && (
+              <span>{(selectedCustomer || selectedOpportunity) ? " → " : ""}线索 {selectedLead.customerName}</span>
+            )}
+          </div>
+        )}
+      </section>
+
+      {/* 第二步：跟进内容与日期 */}
+      <section className="rounded-xl border bg-card p-6 shadow-sm">
+        <h2 className="mb-4 text-base font-semibold text-foreground">跟进内容</h2>
+        <div className="grid gap-6 md:grid-cols-[1fr,auto]">
+          <div>
+            <Label htmlFor="content">跟进内容 *</Label>
+            <textarea
+              id="content"
+              name="content"
+              required
+              rows={5}
+              disabled={isPending}
+              className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              placeholder="请填写本次跟进记录（电话、拜访、方案沟通等）"
+            />
+          </div>
+          <div className="space-y-4 md:min-w-[200px]">
+            <div>
+              <Label htmlFor="followDate">跟进日期 *</Label>
+              <input
+                id="followDate"
+                name="followDate"
+                type="date"
+                required
+                disabled={isPending}
+                defaultValue={new Date().toISOString().slice(0, 10)}
+                className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+              />
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* 第三步：补充信息（可选） */}
+      <section className="rounded-xl border bg-card p-6 shadow-sm">
+        <h2 className="mb-4 text-base font-semibold text-foreground">补充信息（可选）</h2>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div>
+            <Label htmlFor="contactPerson">沟通对象</Label>
+            <input
+              id="contactPerson"
+              name="contactPerson"
+              disabled={isPending}
+              className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+              placeholder="例如：张经理"
+            />
+          </div>
+          <div>
+            <Label htmlFor="summary">一句话进展</Label>
+            <input
+              id="summary"
+              name="summary"
+              disabled={isPending}
+              className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+              placeholder="例如：客户表示有兴趣"
+            />
+          </div>
+          <div>
+            <Label htmlFor="nextStep">下一步计划</Label>
+            <input
+              id="nextStep"
+              name="nextStep"
+              disabled={isPending}
+              className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+              placeholder="例如：下周一发送方案"
+            />
+          </div>
+          <div>
+            <Label htmlFor="customerNeeds">客户需求</Label>
+            <input
+              id="customerNeeds"
+              name="customerNeeds"
+              disabled={isPending}
+              className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+              placeholder="例如：需要支持自定义配置"
+            />
+          </div>
+        </div>
+      </section>
+
+      {/* 第四步：上传图片（可选） */}
+      <section className="rounded-xl border bg-card p-6 shadow-sm">
+        <h2 className="mb-4 text-base font-semibold text-foreground">上传图片（可选）</h2>
         <div
-          className="rounded-md border-2 border-dashed border-muted-foreground/30 bg-muted/20 p-4 transition-colors hover:border-primary/50 hover:bg-muted/30"
+          className="rounded-lg border-2 border-dashed border-muted-foreground/30 bg-muted/20 p-6 transition-colors hover:border-primary/50 hover:bg-muted/30"
           onDragOver={(e) => {
             e.preventDefault();
             e.stopPropagation();
-            if (isPending) return;
-            e.currentTarget.classList.add("border-primary", "bg-muted/40");
+            if (!isPending) e.currentTarget.classList.add("border-primary", "bg-muted/40");
           }}
           onDragLeave={(e) => {
-            e.preventDefault();
             e.currentTarget.classList.remove("border-primary", "bg-muted/40");
           }}
           onDrop={(e) => {
@@ -186,9 +354,7 @@ export function FollowUpForm({
             e.currentTarget.classList.remove("border-primary", "bg-muted/40");
             if (isPending) return;
             const accepted = ["image/jpeg", "image/png", "image/gif", "image/webp"];
-            const files = Array.from(e.dataTransfer.files).filter((f) =>
-              accepted.includes(f.type)
-            );
+            const files = Array.from(e.dataTransfer.files).filter((f) => accepted.includes(f.type));
             if (files.length) setSelectedFiles((prev) => [...prev, ...files]);
           }}
         >
@@ -203,140 +369,31 @@ export function FollowUpForm({
               if (files?.length) setSelectedFiles(Array.from(files));
             }}
           />
-          <p className="mt-2 text-center text-xs text-muted-foreground">
-            或将图片拖入此处
-          </p>
+          <p className="mt-2 text-center text-sm text-muted-foreground">或将图片拖入此处，保存后将自动上传</p>
         </div>
         {selectedFiles.length > 0 && (
-          <p className="mt-1 text-xs text-muted-foreground">
-            已选 {selectedFiles.length} 张图片，保存后将自动上传
-          </p>
+          <p className="mt-2 text-sm text-muted-foreground">已选 {selectedFiles.length} 张图片</p>
         )}
-      </div>
+      </section>
 
-      {/* 关联对象选择区域 */}
-      <div className="space-y-4 rounded-md border border-gray-200 bg-gray-50 p-4">
-        <h3 className="text-sm font-semibold text-gray-900">关联对象</h3>
-        <p className="text-xs text-gray-600">
-          选择此跟进记录关联的线索、商机或客户（至少选择一个）
-        </p>
-
-        {/* 关联线索 */}
-        <div className="space-y-2">
-          <Label>关联线索</Label>
-          <FormSelect
-            name="leadId"
-            value={leadId}
-            options={leadOptions}
-            placeholder="选择关联线索"
-            disabled={isPending}
-            onValueChange={handleLeadChange}
-          />
-          <p className="text-xs text-gray-500">
-            线索：尚未转化为商机的潜在客户
-          </p>
-        </div>
-
-        {/* 分割线 */}
-        <div className="flex items-center gap-2">
-          <div className="flex-1 border-t border-gray-300"></div>
-          <span className="text-xs text-gray-500">或</span>
-          <div className="flex-1 border-t border-gray-300"></div>
-        </div>
-
-        {/* 关联商机 */}
-        <div className="space-y-2">
-          <Label>关联商机</Label>
-          <FormSelect
-            name="opportunityId"
-            value={opportunityId}
-            options={opportunityOptions}
-            placeholder={customerId ? "仅显示该客户的商机" : "选择关联商机"}
-            disabled={isPending}
-            onValueChange={handleOpportunityChange}
-          />
-          <p className="text-xs text-gray-500">
-            商机：已转化的商业机会，正在推进中
-          </p>
-        </div>
-
-        {/* 关联客户 */}
-        <div className="space-y-2">
-          <Label>关联客户</Label>
-          <FormSelect
-            name="customerId"
-            value={customerId}
-            options={customerOptions}
-            placeholder="选择关联客户"
-            disabled={isPending}
-            onValueChange={handleCustomerChange}
-          />
-          <p className="text-xs text-gray-500">
-            客户：已签约或预备签约的客户
-          </p>
-        </div>
-      </div>
-
-      {/* 可选补充信息 */}
-      <div className="space-y-4">
-        <h3 className="text-sm font-semibold text-gray-900">补充信息（可选）</h3>
-        
-        <div>
-          <label className="mb-1 block text-sm font-medium">沟通对象</label>
-          <input
-            name="contactPerson"
-            disabled={isPending}
-            className="w-full rounded-md border px-3 py-2"
-            placeholder="例如：张经理"
-          />
-        </div>
-
-        <div>
-          <label className="mb-1 block text-sm font-medium">一句话进展</label>
-          <input
-            name="summary"
-            disabled={isPending}
-            className="w-full rounded-md border px-3 py-2"
-            placeholder="例如：客户表示有兴趣"
-          />
-        </div>
-
-        <div>
-          <label className="mb-1 block text-sm font-medium">下一步计划</label>
-          <input
-            name="nextStep"
-            disabled={isPending}
-            className="w-full rounded-md border px-3 py-2"
-            placeholder="例如：下周一发送产品方案"
-          />
-        </div>
-
-        <div>
-          <label className="mb-1 block text-sm font-medium">客户需求</label>
-          <input
-            name="customerNeeds"
-            disabled={isPending}
-            className="w-full rounded-md border px-3 py-2"
-            placeholder="例如：需要支持自定义配置"
-          />
-        </div>
-      </div>
-
-      {/* 提交按钮 */}
-      <div className="flex gap-4 pt-4">
+      {/* 提交 */}
+      <div className="flex flex-wrap items-center gap-4">
         <button
           type="submit"
-          disabled={isPending}
-          className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+          disabled={isPending || !hasLink}
+          className="rounded-lg bg-primary px-6 py-2.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:pointer-events-none"
         >
-          {isPending ? "保存中..." : "保存"}
+          {isPending ? "保存中..." : "保存跟进记录"}
         </button>
         <Link
           href="/dashboard/crm/follow-ups"
-          className="rounded-lg border px-4 py-2 text-sm font-medium hover:bg-muted"
+          className="rounded-lg border border-input bg-background px-6 py-2.5 text-sm font-medium hover:bg-muted"
         >
           取消
         </Link>
+        {!hasLink && (
+          <span className="text-sm text-muted-foreground">请先在上方选择关联的客户、商机或线索</span>
+        )}
       </div>
     </form>
   );
