@@ -6,6 +6,7 @@
 
 import { auth } from "@/auth";
 import { del } from "@vercel/blob";
+import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
 
 /** 获取当前用户的 CRM 权限上下文，供数据层过滤使用（role 从数据库读取，确保与 DB 同步） */
@@ -75,10 +76,20 @@ export async function getCrmCounts(auth: CrmAuth) {
 // ============ 线索 ============
 export type GetLeadsOptions = { includeDeleted?: boolean; page?: number; pageSize?: number };
 
+/** getLeads 返回的线索项类型（含 salesPerson、opportunity） */
+export type LeadListItem = Prisma.crm_leadGetPayload<{
+  include: {
+    salesPerson: { select: { id: true; name: true } };
+    opportunity: {
+      select: { id: true; name: true; customer: { select: { id: true; status: true } } };
+    };
+  };
+}>;
+
 export async function getLeads(
   auth: CrmAuth,
   options: GetLeadsOptions = {}
-): Promise<{ items: Awaited<ReturnType<typeof prisma.crm_lead.findMany>>; total: number }> {
+): Promise<{ items: LeadListItem[]; total: number }> {
   const { includeDeleted = false, page, pageSize } = options;
   const where = buildLeadWhere(auth, includeDeleted);
   const orderBy = [{ isKeyFocus: "desc" as const }, { createdAt: "desc" as const }];
@@ -100,10 +111,10 @@ export async function getLeads(
       }),
       prisma.crm_lead.count({ where }),
     ]);
-    return { items, total };
+    return { items: items as LeadListItem[], total };
   }
   const items = await prisma.crm_lead.findMany({ where, orderBy, include });
-  return { items, total: items.length };
+  return { items: items as LeadListItem[], total: items.length };
 }
 
 /**
@@ -390,10 +401,24 @@ export async function deleteLeadWithCascade(leadId: string) {
 
 // ============ 商机 ============
 export type GetOpportunitiesOptions = { page?: number; pageSize?: number; leadId?: string };
+
+/** getOpportunities 返回的商机项类型（含 lead、customer、salesPerson、deliveryPerson，amount 为 number） */
+export type OpportunityListItem = Omit<
+  Prisma.crm_opportunityGetPayload<{
+    include: {
+      lead: { select: { id: true; customerName: true; contactPhone: true } };
+      salesPerson: { select: { id: true; name: true } };
+      deliveryPerson: { select: { id: true; name: true } };
+      customer: { select: { id: true; name: true } };
+    };
+  }>,
+  "amount"
+> & { amount: number | null };
+
 export async function getOpportunities(
   auth: CrmAuth,
   options: GetOpportunitiesOptions = {}
-): Promise<{ items: (Omit<Awaited<ReturnType<typeof prisma.crm_opportunity.findMany>>[number], "amount"> & { amount: number | null })[]; total: number }> {
+): Promise<{ items: OpportunityListItem[]; total: number }> {
   const { page, pageSize, leadId } = options;
   let where = !auth ? emptyWhere : auth.role === "admin" ? {} : salesFilter(auth.userId);
   if (leadId) {
@@ -421,10 +446,10 @@ export async function getOpportunities(
       }),
       prisma.crm_opportunity.count({ where }),
     ]);
-    return { items: mapAmount(rows), total };
+    return { items: mapAmount(rows) as OpportunityListItem[], total };
   }
   const rows = await prisma.crm_opportunity.findMany({ where, orderBy, include });
-  return { items: mapAmount(rows), total: rows.length };
+  return { items: mapAmount(rows) as OpportunityListItem[], total: rows.length };
 }
 
 export async function createOpportunity(data: {
@@ -510,10 +535,22 @@ export async function updateOpportunityStatus(id: string, status: string, lostRe
 
 // ============ 客户 ============
 export type GetCustomersOptions = { page?: number; pageSize?: number };
+
+/** getCustomers 返回的客户项类型（含 opportunity、salesPerson，actualAmount 为 number） */
+export type CustomerListItem = Omit<
+  Prisma.crm_customerGetPayload<{
+    include: {
+      opportunity: { select: { id: true; name: true; lead: { select: { id: true; contactPhone: true } } } };
+      salesPerson: { select: { id: true; name: true } };
+    };
+  }>,
+  "actualAmount"
+> & { actualAmount: number | null };
+
 export async function getCustomers(
   auth: CrmAuth,
   options: GetCustomersOptions = {}
-): Promise<{ items: (Omit<Awaited<ReturnType<typeof prisma.crm_customer.findMany>>[number], "actualAmount"> & { actualAmount: number | null })[]; total: number }> {
+): Promise<{ items: CustomerListItem[]; total: number }> {
   const { page, pageSize } = options;
   const where = !auth ? emptyWhere : auth.role === "admin" ? {} : salesFilter(auth.userId);
   const orderBy = [{ isKeyFocus: "desc" as const }, { createdAt: "desc" as const }];
@@ -542,10 +579,10 @@ export async function getCustomers(
       }),
       prisma.crm_customer.count({ where }),
     ]);
-    return { items: mapAmount(rows), total };
+    return { items: mapAmount(rows) as CustomerListItem[], total };
   }
   const rows = await prisma.crm_customer.findMany({ where, orderBy, include });
-  return { items: mapAmount(rows), total: rows.length };
+  return { items: mapAmount(rows) as CustomerListItem[], total: rows.length };
 }
 
 export async function createCustomer(data: {
@@ -682,14 +719,22 @@ export async function deleteCustomers(customerIds: string[]) {
 // ============ 跟进记录 ============
 /** 跟进记录列表。无 filters 时：admin 看全部，sales 仅看自己跟进或自己负责的线索/商机/客户的记录 */
 export type GetFollowUpsOptions = { page?: number; pageSize?: number };
+
+/** getFollowUps 返回的跟进项类型（含 followUpBy、lead、customer、opportunity） */
+export type FollowUpListItem = Prisma.crm_follow_upGetPayload<{
+  include: {
+    followUpBy: { select: { id: true; name: true } };
+    lead: { select: { id: true; customerName: true } };
+    customer: { select: { id: true; name: true } };
+    opportunity: { select: { id: true; name: true } };
+  };
+}>;
+
 export async function getFollowUps(
   auth: CrmAuth,
   filters?: { leadId?: string; customerId?: string; opportunityId?: string },
   options: GetFollowUpsOptions = {}
-): Promise<{
-  items: Awaited<ReturnType<typeof prisma.crm_follow_up.findMany>>;
-  total: number;
-}> {
+): Promise<{ items: FollowUpListItem[]; total: number }> {
   const { page, pageSize } = options;
   let where: Record<string, unknown> = filters ?? {};
   if (!auth) {
@@ -724,10 +769,10 @@ export async function getFollowUps(
       }),
       prisma.crm_follow_up.count({ where }),
     ]);
-    return { items, total };
+    return { items: items as FollowUpListItem[], total };
   }
   const items = await prisma.crm_follow_up.findMany({ where, orderBy, include });
-  return { items, total: items.length };
+  return { items: items as FollowUpListItem[], total: items.length };
 }
 
 export async function createFollowUp(data: {

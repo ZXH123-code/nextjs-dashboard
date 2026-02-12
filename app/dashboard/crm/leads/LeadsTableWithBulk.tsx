@@ -2,6 +2,7 @@
 
 import { useState, useEffect, Fragment } from "react";
 import Link from "next/link";
+import { Prisma } from "@prisma/client";
 import { useRouter } from "next/navigation";
 import { useAlert } from "@/hooks/use-alert";
 import { useFilter } from "@/hooks/use-filter";
@@ -89,7 +90,7 @@ type Lead = {
   keyFocusByAdmin?: boolean;
   remark?: string | null;
   importSource?: string | null;
-  extraFields?: Record<string, unknown> | null;
+  extraFields?: Prisma.JsonValue | null;
   opportunity: {
     id: string;
     name: string;

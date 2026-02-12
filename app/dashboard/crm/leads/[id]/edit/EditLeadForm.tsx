@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState } from "react";
+import { Prisma } from "@prisma/client";
 import { updateLeadAction } from "@/app/lib/crm-actions";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
@@ -24,7 +25,7 @@ type Lead = {
   status: string;
   remark: string | null;
   importSource: string | null;
-  extraFields: Record<string, unknown> | null;
+  extraFields: Prisma.JsonValue | null;
 };
 
 type User = { id: string; name: string };
@@ -151,7 +152,11 @@ export function EditLeadForm({
           placeholder="选择状态"
         />
       </div>
-      {(lead.importSource || (lead.extraFields && Object.keys(lead.extraFields).length > 0)) && (
+      {(lead.importSource ||
+        (lead.extraFields &&
+          typeof lead.extraFields === "object" &&
+          !Array.isArray(lead.extraFields) &&
+          Object.keys(lead.extraFields).length > 0)) && (
         <div className="space-y-2 rounded-lg border bg-muted/40 p-3 text-xs text-muted-foreground">
           <div className="font-medium text-foreground">其他信息（只读）</div>
           {lead.importSource && (
@@ -160,9 +165,12 @@ export function EditLeadForm({
               <span>{lead.importSource}</span>
             </div>
           )}
-          {lead.extraFields && Object.keys(lead.extraFields).length > 0 && (
-            <div className="mt-1 space-y-1">
-              {Object.entries(lead.extraFields).map(([key, value]) => (
+          {lead.extraFields &&
+            typeof lead.extraFields === "object" &&
+            !Array.isArray(lead.extraFields) &&
+            Object.keys(lead.extraFields).length > 0 && (
+              <div className="mt-1 space-y-1">
+                {Object.entries(lead.extraFields as Record<string, unknown>).map(([key, value]) => (
                 <div key={key} className="flex gap-1">
                   <span className="min-w-[72px] shrink-0 text-muted-foreground">{key}：</span>
                   <span className="break-all">

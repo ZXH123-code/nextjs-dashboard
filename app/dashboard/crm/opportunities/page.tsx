@@ -43,11 +43,6 @@ export default async function OpportunitiesPage({
     console.error("获取商机失败:", e);
   }
 
-  const serializedOpps = opportunities.map((o) => ({
-    ...o,
-    amount: o.amount != null ? Number(o.amount) : null,
-  }));
-
   return (
     <main className="p-6 md:p-8">
       <div className="mb-4 flex items-center justify-between">
@@ -68,7 +63,7 @@ export default async function OpportunitiesPage({
       )}
 
       <OpportunitiesTable
-        opportunities={serializedOpps}
+        opportunities={opportunities}
         currentUserRole={currentUserRole}
         currentUserId={currentUserId}
         users={users}
