@@ -14,6 +14,49 @@ const FROM_EMAIL = process.env.RESEND_FROM_EMAIL || "onboarding@resend.dev";
 export type LeadInfo = { id: string; customerName: string };
 
 /**
+ * 发送注册验证码邮件
+ * @param toEmail 收件人邮箱
+ * @param code 6 位数字验证码
+ */
+export async function sendVerificationCodeEmail(
+  toEmail: string,
+  code: string
+): Promise<{ success: boolean; error?: string }> {
+  if (!resend) {
+    return { success: false, error: "RESEND_API_KEY 未配置" };
+  }
+  if (!toEmail?.trim()) {
+    return { success: false, error: "收件人邮箱为空" };
+  }
+
+  const subject = "您的 Silea CRM 注册验证码";
+  const html = `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="font-family: sans-serif; line-height: 1.6; color: #333;">
+  <p>您好，</p>
+  <p>您正在注册 Silea CRM 账户，验证码为：</p>
+  <p style="font-size: 24px; font-weight: bold; letter-spacing: 4px; color: #be185d;">${escapeHtml(code)}</p>
+  <p style="color: #666; font-size: 14px;">验证码 15 分钟内有效，请勿泄露给他人。</p>
+  <p style="color: #999; font-size: 12px;">如非本人操作，请忽略此邮件。</p>
+</body>
+</html>`;
+
+  const { error } = await resend.emails.send({
+    from: FROM_EMAIL,
+    to: [toEmail.trim()],
+    subject,
+    html,
+  });
+
+  if (error) {
+    return { success: false, error: error.message };
+  }
+  return { success: true };
+}
+
+/**
  * 发送线索指定通知邮件给销售人员（支持同时显示新接手和被转走的线索）
  * @param toEmail 销售人员的注册邮箱（users.email）
  * @param salesPersonName 销售人员姓名

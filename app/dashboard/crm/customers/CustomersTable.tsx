@@ -34,7 +34,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { ChevronDown, ChevronUp, MessageSquarePlus, Filter, X, Check, Briefcase, UserRound, Star, FileText, MoreHorizontal, ExternalLink, FolderOpen } from "lucide-react";
+import { ChevronDown, MessageSquarePlus, Filter, X, Check, Briefcase, UserRound, Star, FileText, MoreHorizontal, ExternalLink, FolderOpen } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { CUSTOMER_STATUS } from "@/app/lib/crm-constants";
 
@@ -43,7 +43,6 @@ type Customer = {
   name: string;
   nickname: string | null;
   city: string | null;
-  customerTier: string | null;
   industry: string | null;
   firstMaintenanceDate: Date | null;
   status: string;
@@ -51,7 +50,7 @@ type Customer = {
   contactPhone: string | null;
   salesPersonId: string | null;
   salesPerson: { id: string; name: string } | null;
-  opportunity: { id: string; name: string; lead: { id: string; contactPhone: string | null } | null } | null;
+  opportunity: { id: string; name: string; lead: { id: string; contactPhone: string | null; customerTier: string | null } | null } | null;
   createdAt: Date;
   isKeyFocus?: boolean;
   keyFocusByAdmin?: boolean;
@@ -96,13 +95,14 @@ export function CustomersTable({
   const [detailCustomerId, setDetailCustomerId] = useState<string | null>(null);
   /** 上传/查看客户资料：抽屉展示的客户 id */
   const [materialsCustomerId, setMaterialsCustomerId] = useState<string | null>(null);
+  /** 多选仅作结构一致（与线索表对齐），无批量操作 */
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
   // 定义筛选字段 - 包含客户表的所有有意义的字段
   const filterFields: FilterField[] = [
     { key: "name", label: "客户名称", type: "text" },
     { key: "nickname", label: "昵称", type: "text" },
     { key: "city", label: "城市", type: "text" },
-    { key: "customerTier", label: "客户分层", type: "text" },
     { key: "industry", label: "行业", type: "text" },
     { key: "status", label: "状态", type: "select", options: CUSTOMER_STATUS.map(s => ({ value: s, label: s })) },
     { key: "actualAmount", label: "实际成交金额", type: "number" },
@@ -140,6 +140,20 @@ export function CustomersTable({
       else next.add(id);
       return next;
     });
+  };
+
+  const toggleSelectOne = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+  const allFilteredSelected = filteredData.length > 0 && filteredData.every((c) => selectedIds.has(c.id));
+  const toggleSelectAll = () => {
+    if (allFilteredSelected) setSelectedIds(new Set());
+    else setSelectedIds(new Set(filteredData.map((c) => c.id)));
   };
 
   const handleWriteFollowUp = async (
@@ -207,8 +221,6 @@ export function CustomersTable({
         return customer.nickname ?? "";
       case "city":
         return customer.city ?? "";
-      case "customerTier":
-        return customer.customerTier ?? "";
       case "industry":
         return customer.industry ?? "";
       case "contactPhone":
@@ -270,7 +282,6 @@ export function CustomersTable({
       formData.append("name", customer.name);
       formData.append("nickname", customer.nickname ?? "");
       formData.append("city", customer.city ?? "");
-      formData.append("customerTier", customer.customerTier ?? "");
       formData.append("industry", customer.industry ?? "");
       formData.append("contactPhone", customer.contactPhone ?? "");
       formData.append(
@@ -317,6 +328,20 @@ export function CustomersTable({
 
   const canEditCustomer = (customer: Customer) =>
     isAdmin || (currentUserId != null && customer.salesPersonId === currentUserId);
+
+  /** 与线索表一致的列内文案最大宽度（截断显示） */
+  const getFieldTextMaxWidthClass = (field: string) => {
+    switch (field) {
+      case "name": return "max-w-[135px]";
+      case "nickname": return "max-w-[110px]";
+      case "city": return "max-w-[90px]";
+      case "industry": return "max-w-[110px]";
+      case "contactPhone": return "max-w-[130px]";
+      case "firstMaintenanceDate": return "max-w-[110px]";
+      case "actualAmount": return "max-w-[110px]";
+      default: return "max-w-[140px]";
+    }
+  };
 
   const renderCustomerCell = (
     customer: Customer,
@@ -365,9 +390,21 @@ export function CustomersTable({
           alignLeft ? "justify-start text-left" : "justify-center",
           isSaving ? "cursor-wait opacity-60" : "cursor-pointer hover:bg-blue-50"
         )}
-        title={isSaving ? "保存中..." : "点击编辑"}
+        title={isSaving ? "保存中..." : (displayValue || "点击编辑")}
       >
-        <span>{displayValue || <span className="text-muted-foreground">-</span>}</span>
+        {displayValue ? (
+          <span
+            className={cn(
+              "inline-block w-full min-w-0 truncate whitespace-nowrap align-middle",
+              getFieldTextMaxWidthClass(field)
+            )}
+            title={displayValue}
+          >
+            {displayValue}
+          </span>
+        ) : (
+          <span className="text-muted-foreground">-</span>
+        )}
         {isSaving && (
           <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-blue-500 border-t-transparent" />
         )}
@@ -425,23 +462,36 @@ export function CustomersTable({
         onClear={clearFilter}
       />
 
-      <div className="rounded-lg border bg-card">
-        <table className="w-full text-left text-sm">
+      <div className="rounded-lg border bg-card overflow-x-auto">
+        <table className="min-w-[980px] w-full table-fixed text-left text-sm">
           <thead className="border-b bg-muted/50">
             <tr>
-              <th className="w-10 px-4 py-3 text-center font-medium"></th>
-              <th className="px-4 py-3 text-center font-medium">客户名称</th>
-              <th className="px-4 py-3 text-center font-medium">昵称</th>
-              <th className="px-4 py-3 text-center font-medium">城市</th>
-              <th className="px-4 py-3 text-center font-medium">客户分层</th>
-              <th className="px-4 py-3 text-center font-medium">行业</th>
-              <th className="px-4 py-3 text-center font-medium">联系方式</th>
-              <th className="px-4 py-3 text-center font-medium">初次维护日期</th>
-              <th className="px-4 py-3 text-center font-medium">实际成交金额</th>
-              <th className="px-4 py-3 text-center font-medium">销售人员</th>
-              <th className="px-4 py-3 text-center font-medium">状态</th>
-              <th className="px-4 py-3 text-center font-medium">来源商机</th>
-              <th className="px-4 py-3 text-center font-medium">操作</th>
+              <th className="w-10 px-4 py-3 text-center font-medium">
+                {filteredData.length > 0 ? (
+                  <label className="flex cursor-pointer items-center justify-center gap-1.5">
+                    <input
+                      type="checkbox"
+                      checked={allFilteredSelected}
+                      onChange={toggleSelectAll}
+                      className="h-4 w-4 rounded border-input"
+                      title={allFilteredSelected ? "取消全选" : "全选当前页"}
+                    />
+                    <span className="sr-only">{allFilteredSelected ? "取消全选" : "全选当前页"}</span>
+                  </label>
+                ) : null}
+              </th>
+              <th className="w-[170px] px-4 py-3 text-center font-medium">客户名称</th>
+              <th className="w-[110px] px-4 py-3 text-center font-medium">昵称</th>
+              <th className="w-[96px] px-4 py-3 text-center font-medium">城市</th>
+              <th className="w-[90px] px-4 py-3 text-center font-medium">客户分层</th>
+              <th className="w-[110px] px-4 py-3 text-center font-medium">行业</th>
+              <th className="w-[130px] px-4 py-3 text-center font-medium">联系方式</th>
+              <th className="w-[120px] px-4 py-3 text-center font-medium">初次维护日期</th>
+              <th className="w-[120px] px-4 py-3 text-center font-medium">实际成交金额</th>
+              <th className="w-[130px] px-4 py-3 text-center font-medium">销售人员</th>
+              <th className="w-[110px] px-4 py-3 text-center font-medium">状态</th>
+              <th className="w-[120px] px-4 py-3 text-center font-medium">来源商机</th>
+              <th className="w-[130px] px-4 py-3 text-center font-medium">操作</th>
             </tr>
           </thead>
           <tbody className="[&_td]:text-center">
@@ -451,7 +501,7 @@ export function CustomersTable({
                   colSpan={13}
                   className="px-4 py-8 text-center text-muted-foreground"
                 >
-                  暂无数据，点击「新建客户」添加，或从商机转入
+                  暂无数据，可从商机（待签约/已赢单）转入客户
                 </td>
               </tr>
             ) : filteredData.length === 0 ? (
@@ -468,19 +518,19 @@ export function CustomersTable({
                 <Fragment key={customer.id}>
                   <tr
                     id={`customer-row-${customer.id}`}
-                    className={`border-b last:border-0 hover:bg-muted/30 ${highlightId === customer.id ? "animate-highlight-row" : ""}`}
+                    className={`border-b last:border-0 hover:bg-muted/30 ${highlightId === customer.id ? "animate-highlight-row" : ""} ${selectedIds.has(customer.id) ? "bg-primary/5" : ""}`}
                   >
                     <td className="px-4 py-3">
-                      <button
-                        onClick={() => toggleExpandedCustomer(customer.id)}
-                        className="text-gray-500 hover:text-gray-700"
-                      >
-                        {expandedCustomerIds.has(customer.id) ? (
-                          <ChevronUp className="h-4 w-4" />
-                        ) : (
-                          <ChevronDown className="h-4 w-4" />
-                        )}
-                      </button>
+                      <label className="flex cursor-pointer items-center justify-center gap-1.5">
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.has(customer.id)}
+                          onChange={() => toggleSelectOne(customer.id)}
+                          className="h-4 w-4 rounded border-input"
+                          title={selectedIds.has(customer.id) ? "取消选择" : "选择"}
+                        />
+                        <span className="sr-only">{selectedIds.has(customer.id) ? "取消选择" : "选择"}</span>
+                      </label>
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex justify-center">
@@ -510,7 +560,12 @@ export function CustomersTable({
                       {renderCustomerCell(customer, "city", customer.city ?? "-")}
                     </td>
                     <td className="px-4 py-3">
-                      {renderCustomerCell(customer, "customerTier", customer.customerTier ?? "-")}
+                      <span
+                        className="inline-block w-full min-w-0 max-w-[90px] truncate whitespace-nowrap align-middle"
+                        title={customer.opportunity?.lead?.customerTier ?? ""}
+                      >
+                        {customer.opportunity?.lead?.customerTier ?? "-"}
+                      </span>
                     </td>
                     <td className="px-4 py-3">
                       {renderCustomerCell(customer, "industry", customer.industry ?? "-")}
@@ -543,7 +598,12 @@ export function CustomersTable({
                       )}
                     </td>
                     <td className="px-4 py-3">
-                      {customer.salesPerson?.name ?? "-"}
+                      <span
+                        className="inline-block w-full min-w-0 max-w-[130px] truncate whitespace-nowrap align-middle"
+                        title={customer.salesPerson?.name ?? ""}
+                      >
+                        {customer.salesPerson?.name ?? "-"}
+                      </span>
                     </td>
                     <td className="px-4 py-3">
                       <CustomerStatusSelect
@@ -565,7 +625,8 @@ export function CustomersTable({
                       {customer.opportunity ? (
                         <Link
                           href={`/dashboard/crm/opportunities`}
-                          className="text-primary hover:underline"
+                          className="inline-block max-w-[120px] truncate text-primary hover:underline"
+                          title={customer.opportunity.name}
                         >
                           {customer.opportunity.name}
                         </Link>
@@ -594,6 +655,10 @@ export function CustomersTable({
                             <DropdownMenuItem onClick={() => setDetailCustomerId(customer.id)}>
                               <FileText className="mr-2 h-4 w-4" />
                               查看详细记录
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => toggleExpandedCustomer(customer.id)}>
+                              <ChevronDown className="mr-2 h-4 w-4" />
+                              {expandedCustomerIds.has(customer.id) ? "收起跟进时间线" : "展开跟进时间线"}
                             </DropdownMenuItem>
                             <DropdownMenuItem onClick={() => setMaterialsCustomerId(customer.id)}>
                               <FolderOpen className="mr-2 h-4 w-4" />
@@ -660,9 +725,9 @@ export function CustomersTable({
                     </div>
                   </div>
                   <div className="space-y-1.5 text-left">
-                    <div className="text-xs font-medium text-muted-foreground">客户分层</div>
+                    <div className="text-xs font-medium text-muted-foreground">客户分层（来自线索）</div>
                     <div className="min-h-[32px] flex items-center text-sm justify-start text-left w-full max-w-sm pl-1">
-                      {renderCustomerCell(customer, "customerTier", customer.customerTier ?? "-", "text", { align: "left" })}
+                      {customer.opportunity?.lead?.customerTier ?? "-"}
                     </div>
                   </div>
                   <div className="space-y-1.5 text-left">

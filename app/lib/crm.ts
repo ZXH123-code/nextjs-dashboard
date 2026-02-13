@@ -74,7 +74,136 @@ export async function getCrmCounts(auth: CrmAuth) {
 }
 
 // ============ 线索 ============
-export type GetLeadsOptions = { includeDeleted?: boolean; page?: number; pageSize?: number };
+/** 筛选条件（与 FilterDialog 结构一致，用于 URL 序列化后传入服务端） */
+export type LeadFilterCondition = {
+  id: string;
+  field: string;
+  operator: string;
+  value: string | string[];
+};
+
+export type LeadFilterGroup = {
+  id: string;
+  conditions: LeadFilterCondition[];
+};
+
+export type LeadFilter = { groups: LeadFilterGroup[] };
+
+export type GetLeadsOptions = {
+  includeDeleted?: boolean;
+  page?: number;
+  pageSize?: number;
+  /** 筛选条件，来自 URL 解码 */
+  filter?: LeadFilter;
+};
+
+/** 将单个筛选条件转换为 Prisma where 子句 */
+function conditionToPrisma(
+  c: LeadFilterCondition
+): Prisma.crm_leadWhereInput {
+  const { field, operator, value } = c;
+  const val = Array.isArray(value) ? value[0] : value;
+  const valStr = String(val ?? "");
+
+  const textFields = [
+    "customerName", "contactPerson", "nickname", "city", "address",
+    "industry", "leadSource", "contactPhone", "customerTier", "status", "remark", "importSource",
+  ];
+  const boolFields = ["isKeyFocus", "keyFocusByAdmin"];
+  const dateFields = ["createdAt"];
+
+  const isText = textFields.includes(field) || field === "salesPerson.name";
+  const isBool = boolFields.includes(field);
+  const isDate = dateFields.includes(field);
+
+  const eqVal = isBool ? valStr === "true" : valStr;
+  const dateVal = valStr ? new Date(valStr) : null;
+
+  switch (operator) {
+    case "equals":
+      if (field === "salesPerson.name") {
+        return { salesPerson: { name: { equals: valStr, mode: "insensitive" } } } as Prisma.crm_leadWhereInput;
+      }
+      if (isBool) return { [field]: eqVal } as Prisma.crm_leadWhereInput;
+      if (isDate) return { [field]: dateVal } as Prisma.crm_leadWhereInput;
+      return { [field]: { equals: valStr, mode: "insensitive" } } as Prisma.crm_leadWhereInput;
+
+    case "notEquals":
+      if (field === "salesPerson.name") {
+        return { salesPerson: { name: { not: { equals: valStr, mode: "insensitive" } } } } as Prisma.crm_leadWhereInput;
+      }
+      if (isBool) return { [field]: { not: eqVal } } as Prisma.crm_leadWhereInput;
+      if (isDate) return { [field]: { not: dateVal } } as Prisma.crm_leadWhereInput;
+      return { [field]: { not: { equals: valStr, mode: "insensitive" } } } as Prisma.crm_leadWhereInput;
+
+    case "contains":
+      if (field === "salesPerson.name") {
+        return { salesPerson: { name: { contains: valStr, mode: "insensitive" } } } as Prisma.crm_leadWhereInput;
+      }
+      return { [field]: { contains: valStr, mode: "insensitive" } } as Prisma.crm_leadWhereInput;
+
+    case "notContains":
+      if (field === "salesPerson.name") {
+        return { salesPerson: { name: { not: { contains: valStr, mode: "insensitive" } } } } as Prisma.crm_leadWhereInput;
+      }
+      return { [field]: { not: { contains: valStr, mode: "insensitive" } } } as Prisma.crm_leadWhereInput;
+
+    case "startsWith":
+      if (field === "salesPerson.name") {
+        return { salesPerson: { name: { startsWith: valStr, mode: "insensitive" } } } as Prisma.crm_leadWhereInput;
+      }
+      return { [field]: { startsWith: valStr, mode: "insensitive" } } as Prisma.crm_leadWhereInput;
+
+    case "endsWith":
+      if (field === "salesPerson.name") {
+        return { salesPerson: { name: { endsWith: valStr, mode: "insensitive" } } } as Prisma.crm_leadWhereInput;
+      }
+      return { [field]: { endsWith: valStr, mode: "insensitive" } } as Prisma.crm_leadWhereInput;
+
+    case "isEmpty":
+      if (field === "salesPerson.name") {
+        return { OR: [{ salesPersonId: null }, { salesPerson: { name: "" } }] };
+      }
+      return { OR: [{ [field]: null }, { [field]: "" }] } as Prisma.crm_leadWhereInput;
+
+    case "isNotEmpty":
+      if (field === "salesPerson.name") {
+        return { AND: [{ salesPersonId: { not: null } }, { salesPerson: { name: { not: "" } } }] };
+      }
+      return { AND: [{ [field]: { not: null } }, { [field]: { not: "" } }] } as Prisma.crm_leadWhereInput;
+
+    case "greaterThan":
+      if (isDate) return { [field]: { gt: dateVal } } as Prisma.crm_leadWhereInput;
+      return { [field]: { gt: Number(valStr) || 0 } } as Prisma.crm_leadWhereInput;
+
+    case "greaterThanOrEqual":
+      if (isDate) return { [field]: { gte: dateVal } } as Prisma.crm_leadWhereInput;
+      return { [field]: { gte: Number(valStr) || 0 } } as Prisma.crm_leadWhereInput;
+
+    case "lessThan":
+      if (isDate) return { [field]: { lt: dateVal } } as Prisma.crm_leadWhereInput;
+      return { [field]: { lt: Number(valStr) || 0 } } as Prisma.crm_leadWhereInput;
+
+    case "lessThanOrEqual":
+      if (isDate) return { [field]: { lte: dateVal } } as Prisma.crm_leadWhereInput;
+      return { [field]: { lte: Number(valStr) || 0 } } as Prisma.crm_leadWhereInput;
+
+    default:
+      return {};
+  }
+}
+
+/** 从 URL 解码的筛选结构构建 Prisma where（组间 OR，组内 AND） */
+function buildLeadWhereFromFilter(filter: LeadFilter | undefined): Prisma.crm_leadWhereInput {
+  if (!filter?.groups?.length) return {};
+  const validGroups = filter.groups.filter((g) => g.conditions?.length > 0);
+  if (validGroups.length === 0) return {};
+  return {
+    OR: validGroups.map((g) => ({
+      AND: g.conditions.map((c) => conditionToPrisma(c)),
+    })),
+  };
+}
 
 /** getLeads 返回的线索项类型（含 salesPerson、opportunity） */
 export type LeadListItem = Prisma.crm_leadGetPayload<{
@@ -90,8 +219,13 @@ export async function getLeads(
   auth: CrmAuth,
   options: GetLeadsOptions = {}
 ): Promise<{ items: LeadListItem[]; total: number }> {
-  const { includeDeleted = false, page, pageSize } = options;
-  const where = buildLeadWhere(auth, includeDeleted);
+  const { includeDeleted = false, page, pageSize, filter } = options;
+  const baseWhere = buildLeadWhere(auth, includeDeleted);
+  const filterWhere = buildLeadWhereFromFilter(filter);
+  const where: Prisma.crm_leadWhereInput = {
+    ...baseWhere,
+    ...filterWhere,
+  };
   const orderBy = [{ isKeyFocus: "desc" as const }, { createdAt: "desc" as const }];
   const include = {
     salesPerson: { select: { id: true, name: true } },
@@ -115,6 +249,29 @@ export async function getLeads(
   }
   const items = await prisma.crm_lead.findMany({ where, orderBy, include });
   return { items: items as LeadListItem[], total: items.length };
+}
+
+const MAX_LEAD_IDS_FOR_SELECT_ALL = 5000;
+
+/** 按当前筛选条件返回线索 id 列表（用于「全选」），最多返回 MAX_LEAD_IDS_FOR_SELECT_ALL 条 */
+export async function getLeadIds(
+  auth: CrmAuth,
+  filter: LeadFilter | undefined,
+  limit = MAX_LEAD_IDS_FOR_SELECT_ALL
+): Promise<{ ids: string[]; total: number }> {
+  const baseWhere = buildLeadWhere(auth, false);
+  const filterWhere = buildLeadWhereFromFilter(filter);
+  const where: Prisma.crm_leadWhereInput = { ...baseWhere, ...filterWhere };
+  const [ids, total] = await Promise.all([
+    prisma.crm_lead.findMany({
+      where,
+      orderBy: [{ isKeyFocus: "desc" as const }, { createdAt: "desc" as const }],
+      select: { id: true },
+      take: limit,
+    }),
+    prisma.crm_lead.count({ where }),
+  ]);
+  return { ids: ids.map((r) => r.id), total };
 }
 
 /**
@@ -536,11 +693,11 @@ export async function updateOpportunityStatus(id: string, status: string, lostRe
 // ============ 客户 ============
 export type GetCustomersOptions = { page?: number; pageSize?: number };
 
-/** getCustomers 返回的客户项类型（含 opportunity、salesPerson，actualAmount 为 number） */
+/** getCustomers 返回的客户项类型（含 opportunity.lead.customerTier 用于展示客户分层，actualAmount 为 number） */
 export type CustomerListItem = Omit<
   Prisma.crm_customerGetPayload<{
     include: {
-      opportunity: { select: { id: true; name: true; lead: { select: { id: true; contactPhone: true } } } };
+      opportunity: { select: { id: true; name: true; lead: { select: { id: true; contactPhone: true; customerTier: true } } } };
       salesPerson: { select: { id: true; name: true } };
     };
   }>,
@@ -559,7 +716,7 @@ export async function getCustomers(
       select: {
         id: true,
         name: true,
-        lead: { select: { id: true, contactPhone: true } },
+        lead: { select: { id: true, contactPhone: true, customerTier: true } },
       },
     },
     salesPerson: { select: { id: true, name: true } },
@@ -585,68 +742,12 @@ export async function getCustomers(
   return { items: mapAmount(rows) as CustomerListItem[], total: rows.length };
 }
 
-export async function createCustomer(data: {
-  name: string;
-  nickname?: string;
-  city?: string;
-  customerTier?: string;
-  opportunityId?: string;
-  salesPersonId?: string;
-  industry?: string;
-  employeeCount?: string;
-  tags?: string;
-  mainProducts?: string;
-  status?: string;
-  actualAmount?: number | null;
-  contactPhone?: string;
-  isKeyFocus?: boolean;
-  keyFocusByAdmin?: boolean;
-}) {
-  // 如果提供了 opportunityId，从商机/线索继承 contactPhone、isKeyFocus、keyFocusByAdmin
-  let contactPhone = data.contactPhone;
-  let isKeyFocus = data.isKeyFocus;
-  let keyFocusByAdmin = data.keyFocusByAdmin;
-  if (data.opportunityId) {
-    const opportunity = await prisma.crm_opportunity.findUnique({
-      where: { id: data.opportunityId },
-      include: { lead: { select: { contactPhone: true, isKeyFocus: true, keyFocusByAdmin: true } } },
-    }) as { contactPhone?: string | null; isKeyFocus?: boolean; keyFocusByAdmin?: boolean; lead?: { contactPhone?: string | null; isKeyFocus?: boolean; keyFocusByAdmin?: boolean } | null } | null;
-    if (contactPhone == null)
-      contactPhone = opportunity?.contactPhone ?? opportunity?.lead?.contactPhone ?? undefined;
-    if (isKeyFocus == null)
-      isKeyFocus = opportunity?.isKeyFocus ?? opportunity?.lead?.isKeyFocus ?? false;
-    if (keyFocusByAdmin == null)
-      keyFocusByAdmin = opportunity?.keyFocusByAdmin ?? opportunity?.lead?.keyFocusByAdmin ?? false;
-  }
-
-  return prisma.crm_customer.create({
-    data: {
-      name: data.name,
-      nickname: data.nickname,
-      city: data.city,
-      customerTier: data.customerTier,
-      opportunityId: data.opportunityId,
-      salesPersonId: data.salesPersonId,
-      industry: data.industry,
-      employeeCount: data.employeeCount,
-      tags: data.tags,
-      mainProducts: data.mainProducts,
-      status: data.status ?? "已签约",
-      actualAmount: data.actualAmount ?? null,
-      contactPhone,
-      isKeyFocus: isKeyFocus ?? false,
-      keyFocusByAdmin: keyFocusByAdmin ?? false,
-    },
-  });
-}
-
 export async function updateCustomer(
   id: string,
   data: {
     name?: string;
     nickname?: string;
     city?: string;
-    customerTier?: string;
     industry?: string;
     firstMaintenanceDate?: Date | null;
     employeeCount?: string;
@@ -663,7 +764,6 @@ export async function updateCustomer(
       name: data.name,
       nickname: data.nickname,
       city: data.city,
-      customerTier: data.customerTier,
       industry: data.industry,
       firstMaintenanceDate: data.firstMaintenanceDate,
       employeeCount: data.employeeCount,
@@ -1086,7 +1186,6 @@ export async function opportunityToCustomer(opportunityId: string) {
       name: lead?.customerName ?? opp.name,
       nickname: lead?.nickname ?? null,
       city: lead?.city ?? null,
-      customerTier: lead?.customerTier ?? null,
       industry: lead?.industry ?? null,
       opportunityId: opp.id,
       salesPersonId: opp.salesPersonId,
@@ -1291,7 +1390,6 @@ export async function globalSearchCrm(
     { city: { contains: k, mode: "insensitive" as const } },
     { industry: { contains: k, mode: "insensitive" as const } },
     { contactPhone: { contains: k, mode: "insensitive" as const } },
-    { customerTier: { contains: k, mode: "insensitive" as const } },
     { mainProducts: { contains: k, mode: "insensitive" as const } },
     { tags: { contains: k, mode: "insensitive" as const } },
     { salesPerson: { name: { contains: k, mode: "insensitive" as const } } },

@@ -5,22 +5,19 @@ import { createOpenAI } from "@ai-sdk/openai";
 import { PrismaClient } from "@prisma/client";
 import { z } from "zod";
 import { getCrmAuth } from "./crm";
-import { prisma } from "./prisma";
 
 const MAX_ROWS = 500;
 const MAX_QUERIES = 5;
 
-/** AI 问数使用只读 DB 连接（若配置了 DATABASE_URL_READONLY），避免越权写操作。见 docs/AI_问数_只读数据库用户.md */
+/** AI 问数仅使用只读 DB 连接（DATABASE_URL_READONLY），不使用主库。未配置时返回 null。 */
 let readOnlyPrisma: PrismaClient | null = null;
-function getReadOnlyPrisma(): PrismaClient {
+function getReadOnlyPrisma(): PrismaClient | null {
   const url = process.env.DATABASE_URL_READONLY;
-  if (url) {
-    if (!readOnlyPrisma) {
-      readOnlyPrisma = new PrismaClient({ datasources: { db: { url } } });
-    }
-    return readOnlyPrisma;
+  if (!url) return null;
+  if (!readOnlyPrisma) {
+    readOnlyPrisma = new PrismaClient({ datasources: { db: { url } } });
   }
-  return prisma;
+  return readOnlyPrisma;
 }
 
 /** 三种方式（优先级）：Gateway 需 Vercel 绑卡；DeepSeek/OpenAI 直连只需各自 API Key */
@@ -163,11 +160,18 @@ export async function askAiQuestionAction(question: string): Promise<AskAiQuesti
     return toSerializable({ success: false, error: "未配置 AI API Key（AI_GATEWAY_API_KEY / DEEPSEEK_API_KEY / OPENAI_API_KEY 任选其一）" });
   }
 
+  const db = getReadOnlyPrisma();
+  if (!db) {
+    return toSerializable({
+      success: false,
+      error: "未配置只读数据库连接（DATABASE_URL_READONLY），AI 问数不可用。请在 .env 中配置 DATABASE_URL_READONLY。",
+    });
+  }
+
   try {
     const { provider, modelId, useChat } = getOpenAI();
     const model = useChat ? provider.chat(modelId) : provider(modelId);
     const schemaPrompt = buildSchemaPrompt(auth);
-    const db = getReadOnlyPrisma();
 
     const isDeepSeek = !!process.env.DEEPSEEK_API_KEY;
     let queries: string[];

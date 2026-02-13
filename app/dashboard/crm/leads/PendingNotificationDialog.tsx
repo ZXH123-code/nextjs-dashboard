@@ -12,7 +12,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Loader2, Mail, CheckCircle2, XCircle, UserPlus, UserMinus } from "lucide-react";
+import { Mail, CheckCircle2, XCircle, UserPlus, UserMinus } from "lucide-react";
+import { LoadingSpinner } from "@/app/ui/loading-spinner";
 
 type SalesPerson = {
   id: string;
@@ -106,7 +107,7 @@ export function PendingNotificationDialog({
 
         {loading ? (
           <div className="flex items-center justify-center py-8">
-            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+            <LoadingSpinner type="double-arc" size={24} className="text-muted-foreground shrink-0" />
             <span className="ml-2 text-sm text-muted-foreground">加载中...</span>
           </div>
         ) : !result ? (
@@ -176,7 +177,7 @@ export function PendingNotificationDialog({
                   <Button onClick={handleSend} disabled={sending}>
                     {sending ? (
                       <>
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        <LoadingSpinner type="arc" size={16} className="mr-2 shrink-0" />
                         发送中...
                       </>
                     ) : (

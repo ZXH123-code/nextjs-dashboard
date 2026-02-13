@@ -28,6 +28,20 @@ model users {
   crm_customer_materials_uploaded crm_customer_material[]
 }
 
+/// 注册/找回密码等场景的邮箱验证码，单次有效、15 分钟过期
+model email_verification_code {
+  id        String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  email     String   @db.VarChar(255)
+  code      String   @db.VarChar(8)
+  purpose   String   @default("signup") @db.VarChar(20)
+  expiresAt DateTime @map("expires_at") @db.Timestamp(6)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+
+  @@unique([email, purpose])
+  @@index([email, purpose])
+  @@map("email_verification_codes")
+}
+
 // ============ CRM 四张表 ============
 
 /// 线索管理：总池子来源，状态更新后可转入商机
@@ -105,8 +119,7 @@ model crm_customer {
   name                 String    @db.VarChar(255)
   nickname             String?   @db.VarChar(100)
   city                 String?   @db.VarChar(100)
-  customerTier         String?   @map("customer_tier") @db.VarChar(50)
-  firstMaintenanceDate DateTime? @map("first_maintenance_date") @db.Date
+  firstMaintenanceDate DateTime?  @map("first_maintenance_date") @db.Date
   status               String    @default("已签约") @db.VarChar(50) // 预备签约|已签约|流失
   industry             String?   @db.VarChar(100)
   employeeCount        String?   @map("employee_count") @db.VarChar(50)

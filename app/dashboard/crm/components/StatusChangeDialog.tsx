@@ -12,7 +12,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
-import { Loader2 } from "lucide-react";
+import { LoadingSpinner } from "@/app/ui/loading-spinner";
 
 interface StatusChangeDialogProps {
   isOpen: boolean;
@@ -108,7 +108,7 @@ export function StatusChangeDialog({
             disabled={isSubmitting}
             className="gap-2"
           >
-            {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+            {isSubmitting ? <LoadingSpinner type="arc" size={16} className="shrink-0" /> : null}
             确定
           </Button>
         </DialogFooter>

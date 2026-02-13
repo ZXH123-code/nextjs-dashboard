@@ -3,6 +3,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/app/lib/prisma";
 import type { Prisma } from "@prisma/client";
 import * as XLSX from "xlsx";
+import { recordLeadAssignmentChanges } from "@/app/lib/crm";
 
 type LeadRow = {
   客户名称?: unknown;
@@ -69,10 +70,18 @@ const ALLOWED_TARGET_FIELDS = new Set<string>([
   "remark",
 ]);
 
+/** 安全截断字符串，避免超过数据库字段长度导致 P2000 错误 */
+function truncate(str: string | undefined, max: number): string | undefined {
+  if (str == null || str === "") return undefined;
+  return str.length > max ? str.slice(0, max) : str;
+}
+
 export async function POST(req: Request) {
   // 权限校验：仅 admin 可导入
   const session = await auth();
-  const role = (session?.user as { role?: string })?.role ?? "sales";
+  const user = session?.user as { id?: string; role?: string } | null;
+  const userId = user?.id ?? null;
+  const role = user?.role ?? "sales";
   if (role !== "admin") {
     return NextResponse.json({ error: "无权限" }, { status: 403 });
   }
@@ -219,9 +228,13 @@ export async function POST(req: Request) {
         ? file.name.trim().slice(0, 100)
         : undefined;
 
+    // 记录导入开始时间，用于后续查询本次导入创建的线索
+    const importStartedAt = new Date();
+
     rows.forEach((row: LeadRow, index: number) => {
       const rowNum = index + 1; // 记录序号，从1开始
-      const customerName = getMappedStr(row, "customerName", ["客户名称"]);
+      const customerNameRaw = getMappedStr(row, "customerName", ["客户名称"]);
+      const customerName = truncate(customerNameRaw, 255) ?? "";
       if (!customerName) {
         const message = "客户名称为空";
         errors.push({ row: rowNum, message });
@@ -231,13 +244,13 @@ export async function POST(req: Request) {
           message,
           data: {
             客户名称: customerName,
-            昵称: getMappedStr(row, "nickname", ["昵称"]) || undefined,
-            联系人: getMappedStr(row, "contactPerson", ["联系人"]) || undefined,
-            城市: getMappedStr(row, "city", ["城市"]) || undefined,
-            详细地址: getMappedStr(row, "address", ["详细地址"]) || undefined,
-            行业: getMappedStr(row, "industry", ["行业"]) || undefined,
-            线索来源: getMappedStr(row, "leadSource", ["线索来源"]) || undefined,
-            客户分层: getMappedStr(row, "customerTier", ["客户分层"]) || undefined,
+            昵称: truncate(getMappedStr(row, "nickname", ["昵称"]), 100),
+            联系人: truncate(getMappedStr(row, "contactPerson", ["联系人"]), 100),
+            城市: truncate(getMappedStr(row, "city", ["城市"]), 100),
+            详细地址: truncate(getMappedStr(row, "address", ["详细地址"]), 500),
+            行业: truncate(getMappedStr(row, "industry", ["行业"]), 100),
+            线索来源: truncate(getMappedStr(row, "leadSource", ["线索来源"]), 100),
+            客户分层: truncate(getMappedStr(row, "customerTier", ["客户分层"]), 50),
             状态: "未跟进",
           },
         });
@@ -264,29 +277,42 @@ export async function POST(req: Request) {
       }
       const extraCount = Object.keys(extraFields).length;
 
+      const nickname = truncate(getMappedStr(row, "nickname", ["昵称"]), 100);
+      const contactPerson = truncate(getMappedStr(row, "contactPerson", ["联系人"]), 100);
+      const contactEmail = truncate(getMappedStr(row, "contactEmail", ["联系人邮箱"]), 255);
+      const contactPhone = truncate(
+        getMappedStr(row, "contactPhone", [
+          "手机号",
+          "手机",
+          "手机号码",
+          "电话",
+          "电话号",
+          "联系电话",
+          "座机",
+          "传真",
+          "传真号",
+        ]),
+        20,
+      );
+      const city = truncate(getMappedStr(row, "city", ["城市"]), 100);
+      const address = truncate(getMappedStr(row, "address", ["详细地址"]), 500);
+      const industry = truncate(getMappedStr(row, "industry", ["行业"]), 100);
+      const leadSource = truncate(getMappedStr(row, "leadSource", ["线索来源"]), 100);
+      const customerTier = truncate(getMappedStr(row, "customerTier", ["客户分层"]), 50);
+      const remark = truncate(getMappedStr(row, "remark", ["备注"]), 500);
+
       dataToInsert.push({
         customerName,
-        nickname: getMappedStr(row, "nickname", ["昵称"]) || undefined,
-        contactPerson: getMappedStr(row, "contactPerson", ["联系人"]) || undefined,
-        contactEmail: getMappedStr(row, "contactEmail", ["联系人邮箱"]) || undefined,
-        contactPhone:
-          getMappedStr(row, "contactPhone", [
-            "手机号",
-            "手机",
-            "手机号码",
-            "电话",
-            "电话号",
-            "联系电话",
-            "座机",
-            "传真",
-            "传真号",
-          ]) || undefined,
-        city: getMappedStr(row, "city", ["城市"]) || undefined,
-        address: getMappedStr(row, "address", ["详细地址"]) || undefined,
-        industry: getMappedStr(row, "industry", ["行业"]) || undefined,
-        leadSource: getMappedStr(row, "leadSource", ["线索来源"]) || undefined,
-        customerTier: getMappedStr(row, "customerTier", ["客户分层"]) || undefined,
-        remark: getMappedStr(row, "remark", ["备注"]) || undefined,
+        nickname,
+        contactPerson,
+        contactEmail,
+        contactPhone,
+        city,
+        address,
+        industry,
+        leadSource,
+        customerTier,
+        remark,
         salesPersonId: salesPersonId || undefined,
         status: "未跟进",
         importSource,
@@ -298,13 +324,13 @@ export async function POST(req: Request) {
         status: "success",
         data: {
           客户名称: customerName,
-          昵称: getMappedStr(row, "nickname", ["昵称"]) || undefined,
-          联系人: getMappedStr(row, "contactPerson", ["联系人"]) || undefined,
-          城市: getMappedStr(row, "city", ["城市"]) || undefined,
-          详细地址: getMappedStr(row, "address", ["详细地址"]) || undefined,
-          行业: getMappedStr(row, "industry", ["行业"]) || undefined,
-          线索来源: getMappedStr(row, "leadSource", ["线索来源"]) || undefined,
-          客户分层: getMappedStr(row, "customerTier", ["客户分层"]) || undefined,
+          昵称: nickname,
+          联系人: contactPerson,
+          城市: city,
+          详细地址: address,
+          行业: industry,
+          线索来源: leadSource,
+          客户分层: customerTier,
           预览销售人员: resolvedBatchSalesName ?? "未指定",
           状态: "未跟进",
           其他字段数: extraCount || undefined,
@@ -340,6 +366,28 @@ export async function POST(req: Request) {
     const result = await prisma.crm_lead.createMany({
       data: dataToInsert,
     });
+
+    // 若本次导入时批量指定了销售人员，则为新创建的线索记录指派变更通知，供管理员发送邮件
+    if (!isPreviewOnly && resolvedBatchSalesId && userId && result.count > 0) {
+      const newLeads = await prisma.crm_lead.findMany({
+        where: {
+          importSource,
+          salesPersonId: resolvedBatchSalesId,
+          createdAt: { gte: importStartedAt },
+        },
+        select: { id: true },
+      });
+      if (newLeads.length > 0) {
+        await recordLeadAssignmentChanges(
+          newLeads.map((l) => ({
+            leadId: l.id,
+            oldSalesPersonId: null,
+            newSalesPersonId: resolvedBatchSalesId,
+          })),
+          userId,
+        );
+      }
+    }
 
     return NextResponse.json({
       mode,

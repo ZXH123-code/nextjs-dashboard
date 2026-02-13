@@ -1,21 +1,65 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { lusitana } from "@/app/ui/fonts";
-import { AlertCircle, ArrowRight, User, Mail, Lock, ShieldCheck } from "lucide-react";
+import { AlertCircle, ArrowRight, User, Mail, Lock, ShieldCheck, KeyRound } from "lucide-react";
 import { GlobeAltIcon } from "@heroicons/react/24/outline";
 import { register } from "@/app/lib/auth-actions";
 import { useActionState } from "react";
 import { Suspense } from "react";
 import Link from "next/link";
 
+const COOLDOWN_SEC = 60;
+
 function RegisterContent() {
   const [isExpanded, setIsExpanded] = useState(false);
   const [isFormFocused, setIsFormFocused] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const formRef = useRef<HTMLFormElement>(null);
+  const [countdown, setCountdown] = useState(0);
+  const [codeSendError, setCodeSendError] = useState<string | null>(null);
+  const [codeSendLoading, setCodeSendLoading] = useState(false);
 
   const [registerError, registerAction, registerPending] = useActionState(register, undefined);
+
+  const handleSendCode = useCallback(async () => {
+    const form = formRef.current;
+    if (!form) return;
+    const emailEl = form.querySelector<HTMLInputElement>('input[name="email"]');
+    const email = emailEl?.value?.trim() ?? "";
+    if (!email) {
+      setCodeSendError("请先填写邮箱地址");
+      return;
+    }
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      setCodeSendError("请输入有效的邮箱地址");
+      return;
+    }
+    setCodeSendError(null);
+    setCodeSendLoading(true);
+    try {
+      const res = await fetch("/api/auth/send-verification-code", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setCodeSendError(data.error ?? "发送失败");
+        return;
+      }
+      setCountdown(COOLDOWN_SEC);
+    } finally {
+      setCodeSendLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (countdown <= 0) return;
+    const t = setInterval(() => setCountdown((c) => (c <= 0 ? 0 : c - 1)), 1000);
+    return () => clearInterval(t);
+  }, [countdown]);
 
   useEffect(() => {
     const checkMobile = () => setIsMobile(window.innerWidth < 768);
@@ -147,6 +191,35 @@ function RegisterContent() {
               className="landing-input-compact"
             />
           </div>
+          <div className="flex gap-2">
+            <div className="landing-input-wrapper-compact flex-1">
+              <KeyRound className="landing-input-icon" />
+              <input
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                maxLength={6}
+                name="verificationCode"
+                placeholder="验证码（6位）"
+                required
+                className="landing-input-compact"
+              />
+            </div>
+            <button
+              type="button"
+              onClick={handleSendCode}
+              disabled={codeSendLoading || countdown > 0}
+              className="shrink-0 px-4 py-2.5 text-sm font-medium rounded-lg border border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100 hover:border-slate-300 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              {countdown > 0 ? `${countdown}s 后重试` : codeSendLoading ? "发送中..." : "获取验证码"}
+            </button>
+          </div>
+          {codeSendError && (
+            <div className="flex items-center gap-2 text-red-500 text-sm">
+              <AlertCircle className="h-4 w-4 flex-shrink-0" />
+              <span>{codeSendError}</span>
+            </div>
+          )}
           <div className="landing-input-wrapper-compact">
             <Lock className="landing-input-icon" />
             <input

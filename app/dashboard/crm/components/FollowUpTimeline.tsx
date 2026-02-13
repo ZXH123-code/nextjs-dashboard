@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
-import { Loader2, ImageIcon, Plus, Trash2, MoreHorizontal, Pencil } from "lucide-react";
+import { ImageIcon, Plus, Trash2, MoreHorizontal, Pencil } from "lucide-react";
+import { LoadingSpinner } from "@/app/ui/loading-spinner";
 import { useAlert } from "@/hooks/use-alert";
 import { useConfirm } from "@/hooks/use-confirm";
 import { Progress } from "@/components/ui/progress";
@@ -158,7 +159,7 @@ export function FollowUpTimeline({
     return (
       <div className="space-y-3">
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
+          <span className="shrink-0" aria-hidden><LoadingSpinner type="arc" size={16} /></span>
           <span>加载跟进记录{".".repeat(ellipsis + 1)}</span>
         </div>
         <FollowUpTimelineSkeleton />

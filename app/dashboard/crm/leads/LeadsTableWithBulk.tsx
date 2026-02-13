@@ -1,12 +1,12 @@
 "use client";
 
-import { useState, useEffect, Fragment } from "react";
+import { useState, useEffect, Fragment, useMemo, useCallback, memo } from "react";
 import Link from "next/link";
 import { Prisma } from "@prisma/client";
-import { useRouter } from "next/navigation";
+import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { useAlert } from "@/hooks/use-alert";
-import { useFilter } from "@/hooks/use-filter";
-import { FilterDialog, type FilterField } from "@/components/ui/filter-dialog";
+import { FilterDialog, type FilterField, type FilterCondition, type FilterGroup } from "@/components/ui/filter-dialog";
+import type { LeadFilter } from "@/app/lib/crm";
 import { LeadStatusSelect } from "./LeadStatusSelect";
 import { LeadSalesPersonSelect } from "./LeadSalesPersonSelect";
 import { LeadSourceSelect } from "./LeadSourceSelect";
@@ -52,9 +52,9 @@ import {
   Filter,
   X,
   FileText,
-  Loader2,
   Star,
 } from "lucide-react";
+import { LoadingSpinner } from "@/app/ui/loading-spinner";
 import {
   Sheet,
   SheetContent,
@@ -63,11 +63,8 @@ import {
 } from "@/components/ui/sheet";
 import { FollowUpTimeline } from "../components/FollowUpTimeline";
 import { WriteFollowUpDialog } from "../components/WriteFollowUpDialog";
-import { createManualFollowUpAction, updateLeadAction, softDeleteLeadAction, syncLeadNameToCustomerAction, syncLeadContactPhoneToCustomerAction, syncLeadContactPhoneToOpportunityAction, batchUpdateLeadSalesPersonWithFollowUpAction, toggleLeadKeyFocusAction, batchSetLeadKeyFocusAction, batchSoftDeleteLeadsAction } from "@/app/lib/crm-actions";
+import { createManualFollowUpAction, updateLeadAction, softDeleteLeadAction, syncLeadNameToCustomerAction, syncLeadContactPhoneToCustomerAction, syncLeadContactPhoneToOpportunityAction, batchUpdateLeadSalesPersonWithFollowUpAction, toggleLeadKeyFocusAction, batchSetLeadKeyFocusAction, batchSoftDeleteLeadsAction, getLeadIdsAction } from "@/app/lib/crm-actions";
 import { LEAD_STATUS } from "@/app/lib/crm-constants";
-
-/** 线索表中客户名称列显示的最大字符数，超出以 ... 代替 */
-const MAX_CUSTOMER_NAME_DISPLAY = 15;
 
 type Lead = {
   id: string;
@@ -100,6 +97,31 @@ type Lead = {
 
 type User = { id: string; name: string };
 
+/** 多选复选框单元格：memo 避免未勾选行在他人勾选时重渲染，减轻卡顿 */
+const LeadRowCheckbox = memo(function LeadRowCheckbox({
+  leadId,
+  checked,
+  onToggle,
+}: {
+  leadId: string;
+  checked: boolean;
+  onToggle: (id: string) => void;
+}) {
+  return (
+    <td className="px-4 py-3">
+      <label className="flex cursor-pointer items-center justify-center">
+        <input
+          type="checkbox"
+          checked={checked}
+          onChange={() => onToggle(leadId)}
+          className="h-4 w-4 rounded border-input"
+          onClick={(e) => e.stopPropagation()}
+        />
+      </label>
+    </td>
+  );
+});
+
 export function LeadsTableWithBulk({
   leads,
   users,
@@ -107,6 +129,11 @@ export function LeadsTableWithBulk({
   currentUserRole,
   currentUserId,
   highlightId,
+  total,
+  page,
+  pageSize,
+  initialFilter,
+  filterParam,
 }: {
   leads: Lead[];
   users: User[];
@@ -114,8 +141,23 @@ export function LeadsTableWithBulk({
   currentUserRole?: string;
   currentUserId?: string;
   highlightId?: string;
+  /** 服务端分页：总条数 */
+  total?: number;
+  /** 服务端分页：当前页 */
+  page?: number;
+  /** 服务端分页：每页条数 */
+  pageSize?: number;
+  /** 服务端筛选：来自 URL 的筛选条件 */
+  initialFilter?: LeadFilter;
+  /** 原始 filter 参数字符串（用于 preserveParams） */
+  filterParam?: string;
 }) {
   const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const doRefresh = () => router.refresh();
+
+  const isServerMode = total != null && page != null && pageSize != null;
   const { showAlert, AlertComponent } = useAlert();
   const { showConfirm, ConfirmComponent } = useConfirm();
   const [expandedLeadIds, setExpandedLeadIds] = useState<Set<string>>(new Set());
@@ -145,6 +187,10 @@ export function LeadsTableWithBulk({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   /** 右键菜单位置，有值时显示操作菜单 */
   const [contextMenuAt, setContextMenuAt] = useState<{ x: number; y: number } | null>(null);
+  /** 「全选」拉取全部 id 时的加载状态 */
+  const [selectAllLoading, setSelectAllLoading] = useState(false);
+  /** 当前是否为「全选全部」状态（点击全选全部后为 true，取消或手动改选时置 false） */
+  const [hasSelectedAllMatching, setHasSelectedAllMatching] = useState(false);
   /** 批量指定对话框 */
   const [batchAssignOpen, setBatchAssignOpen] = useState(false);
   const [batchAssignSalesPersonId, setBatchAssignSalesPersonId] = useState("");
@@ -171,15 +217,67 @@ export function LeadsTableWithBulk({
     { key: "createdAt", label: "创建时间", type: "date" },
   ];
 
-  // 使用筛选 Hook
-  const { filteredData, conditions, groups, applyFilter, clearFilter, hasActiveFilters, activeFilterCount } = useFilter(rows, filterFields);
+  // 服务端模式：筛选与分页由 URL + 服务端驱动
+  const groups = useMemo<FilterGroup[]>(
+    () => initialFilter?.groups?.filter((g) => g.conditions?.length) ?? [],
+    [initialFilter]
+  );
+  const hasActiveFilters = groups.length > 0;
+  const activeFilterCount = groups.reduce((s, g) => s + g.conditions.length, 0);
 
-  // 当前页/筛选结果的所有 id（全选仅作用于当前筛选结果）
-  const filteredIds = filteredData.map((l) => l.id);
+  const totalFiltered = isServerMode ? (total ?? 0) : rows.length;
+  const totalPages = isServerMode
+    ? Math.max(1, Math.ceil((total ?? 0) / (pageSize ?? 20)))
+    : 1;
+  const currentPage = isServerMode ? (page ?? 1) : 1;
+  const currentPageSize = isServerMode ? (pageSize ?? 20) : 20;
+  const displayedData = isServerMode ? leads : rows;
+  const startItem =
+    totalFiltered === 0 ? 0 : (currentPage - 1) * currentPageSize + 1;
+  const endItem = Math.min(currentPage * currentPageSize, totalFiltered);
+
+  const buildUrl = (updates: { page?: number; pageSize?: number; filter?: string }) => {
+    const params = new URLSearchParams(searchParams.toString());
+    if (updates.page != null) params.set("page", String(updates.page));
+    if (updates.pageSize != null) params.set("pageSize", String(updates.pageSize));
+    if (updates.filter !== undefined) {
+      if (updates.filter) params.set("filter", updates.filter);
+      else params.delete("filter");
+    }
+    const qs = params.toString();
+    return qs ? `${pathname}?${qs}` : pathname;
+  };
+
+  const handleApplyFilter = (newConditions: FilterCondition[], newGroups?: FilterGroup[]) => {
+    const gs = newGroups?.filter((g) => g.conditions?.length) ?? [];
+    const filterStr = gs.length > 0 ? encodeURIComponent(JSON.stringify({ groups: gs })) : "";
+    router.replace(buildUrl({ page: 1, filter: filterStr }));
+  };
+
+  const handleClearFilter = () => {
+    router.replace(buildUrl({ page: 1, filter: "" }));
+  };
+
+  // 当前页/筛选结果的所有 id（全选仅作用于当前页）
+  const filteredIds = useMemo(
+    () => displayedData.map((l) => l.id),
+    [displayedData]
+  );
   const allFilteredSelected =
     filteredIds.length > 0 && filteredIds.every((id) => selectedIds.has(id));
 
-  const toggleSelectAll = () => {
+  const toggleSelectOne = useCallback((id: string) => {
+    setHasSelectedAllMatching(false);
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const toggleSelectAll = useCallback(() => {
+    setHasSelectedAllMatching(false);
     setSelectedIds((prev) => {
       const next = new Set(prev);
       if (allFilteredSelected) {
@@ -189,18 +287,48 @@ export function LeadsTableWithBulk({
       }
       return next;
     });
-  };
+  }, [allFilteredSelected, filteredIds]);
 
-  const toggleSelectOne = (id: string) => {
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  };
+  const clearSelection = useCallback(() => {
+    setSelectedIds(new Set());
+    setHasSelectedAllMatching(false);
+  }, []);
 
-  const clearSelection = () => setSelectedIds(new Set());
+  /** 全选（共 N 条）：按当前筛选拉取全部 id 并选中 */
+  const handleSelectAllMatching = useCallback(async () => {
+    if (totalFiltered === 0) return;
+    setSelectAllLoading(true);
+    try {
+      const result = await getLeadIdsAction(filterParam ?? undefined);
+      if ("ids" in result && "total" in result) {
+        const { ids, total } = result;
+        setSelectedIds(new Set(ids));
+        setHasSelectedAllMatching(true);
+        if (ids.length < total) {
+          showAlert(`已选 ${ids.length} 条（共 ${total} 条，全选最多支持 ${ids.length} 条）`, { type: "info", title: "已全选" });
+        }
+      } else {
+        showAlert((result as { error?: string }).error ?? "获取列表失败", { type: "error", title: "全选失败" });
+      }
+    } finally {
+      setSelectAllLoading(false);
+    }
+  }, [filterParam, totalFiltered, showAlert]);
+
+  /** 取消全部全选：清空当前选择 */
+  const handleCancelSelectAllMatching = useCallback(() => {
+    clearSelection();
+  }, [clearSelection]);
+
+  // 筛选条件变化时，「全部全选」状态失效
+  useEffect(() => {
+    setHasSelectedAllMatching(false);
+  }, [filterParam]);
+
+  // 选中被清空时（如批量操作后），按钮恢复为「全选全部」
+  useEffect(() => {
+    if (selectedIds.size === 0) setHasSelectedAllMatching(false);
+  }, [selectedIds.size]);
 
   // 记录区域右键：有选中时显示操作菜单
   const handleTableContextMenu = (e: React.MouseEvent) => {
@@ -257,7 +385,7 @@ export function LeadsTableWithBulk({
       } else {
         setBatchAssignOpen(false);
         clearSelection();
-        router.refresh();
+        doRefresh();
         const updated = result?.updatedCount ?? 0;
         const skipped = result?.skippedCount ?? 0;
         if (updated === 0) {
@@ -351,7 +479,7 @@ export function LeadsTableWithBulk({
         ...prev,
         [leadIdJustSubmitted]: (prev[leadIdJustSubmitted] ?? 0) + 1,
       }));
-      router.refresh();
+      doRefresh();
     } catch (error) {
       console.error("添加跟进记录失败:", error);
       showAlert("添加跟进记录失败", { type: "error", title: "操作失败" });
@@ -402,7 +530,7 @@ export function LeadsTableWithBulk({
         );
         showAlert(result.error, { type: "error", title: "操作失败" });
       } else {
-        router.refresh();
+        doRefresh();
       }
     } catch (e) {
       setRows((prev) =>
@@ -517,7 +645,7 @@ export function LeadsTableWithBulk({
           });
           return;
         }
-        router.refresh();
+        doRefresh();
       }
     } catch (e) {
       console.error(e);
@@ -538,6 +666,35 @@ export function LeadsTableWithBulk({
 
   const canEditLead = (lead: Lead) =>
     isAdmin || (currentUserId != null && lead.salesPersonId === currentUserId);
+
+  const getFieldTextMaxWidthClass = (field: string) => {
+    switch (field) {
+      case "customerName":
+        return "max-w-[135px]";
+      case "contactPerson":
+        return "max-w-[110px]";
+      case "city":
+        return "max-w-[90px]";
+      case "industry":
+        return "max-w-[110px]";
+      case "leadSource":
+        return "max-w-[130px]";
+      case "contactPhone":
+        return "max-w-[130px]";
+      case "nickname":
+        return "max-w-[110px]";
+      case "address":
+        return "max-w-[180px]";
+      case "customerTier":
+        return "max-w-[90px]";
+      case "contactEmail":
+        return "max-w-[170px]";
+      case "remark":
+        return "max-w-[220px]";
+      default:
+        return "max-w-[140px]";
+    }
+  };
 
   const renderLeadCell = (
     lead: Lead,
@@ -615,7 +772,20 @@ export function LeadsTableWithBulk({
         )}
         title={isSaving ? "保存中..." : (options?.title ?? "点击编辑")}
       >
-        <span>{displayValue || <span className="text-muted-foreground">-</span>}</span>
+        {displayValue ? (
+          <span
+            className={cn(
+              "inline-block w-full min-w-0 truncate whitespace-nowrap align-middle",
+              getFieldTextMaxWidthClass(field),
+              (field === "contactPerson" || field === "city") && "text-center"
+            )}
+            title={displayValue}
+          >
+            {displayValue}
+          </span>
+        ) : (
+          <span className="text-muted-foreground">-</span>
+        )}
         {isSaving && (
           <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-blue-500 border-t-transparent" />
         )}
@@ -691,27 +861,68 @@ export function LeadsTableWithBulk({
             <Button
               variant="ghost"
               size="sm"
-              onClick={clearFilter}
+              onClick={handleClearFilter}
               className="flex items-center gap-2"
             >
               <X className="h-4 w-4" />
               清除筛选
             </Button>
           )}
+          {displayedData.length > 0 && (
+            <>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={toggleSelectAll}
+                className="flex items-center gap-2"
+              >
+                {allFilteredSelected ? (
+                  <>
+                    <X className="h-4 w-4" />
+                    取消当页全选
+                  </>
+                ) : (
+                  <>
+                    <Check className="h-4 w-4" />
+                    当页全选（{displayedData.length} 条）
+                  </>
+                )}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={hasSelectedAllMatching ? handleCancelSelectAllMatching : handleSelectAllMatching}
+                disabled={!hasSelectedAllMatching && (totalFiltered === 0 || selectAllLoading)}
+                className="flex items-center gap-2"
+              >
+                {selectAllLoading ? (
+                  <LoadingSpinner type="arc" size={16} className="shrink-0" />
+                ) : hasSelectedAllMatching ? (
+                  <X className="h-4 w-4" />
+                ) : (
+                  <Check className="h-4 w-4" />
+                )}
+                {hasSelectedAllMatching ? "取消全部全选" : `全选全部（${totalFiltered} 条）`}
+              </Button>
+            </>
+          )}
         </div>
         <div className="text-sm text-muted-foreground">
-          共 {filteredData.length} 条数据
+          {totalFiltered === 0
+            ? "共 0 条"
+            : `共 ${totalFiltered} 条，当前第 ${startItem}–${endItem} 条`}
         </div>
       </div>
 
       <FilterDialog
+        key={filterParam ?? "empty"}
         open={filterOpen}
         onOpenChange={setFilterOpen}
         fields={filterFields}
-        conditions={conditions}
+        conditions={[]}
         groups={groups}
-        onApply={applyFilter}
-        onClear={clearFilter}
+        onApply={handleApplyFilter}
+        onClear={handleClearFilter}
       />
 
       <div className="space-y-3" onContextMenu={handleTableContextMenu}>
@@ -838,89 +1049,57 @@ export function LeadsTableWithBulk({
           </div>
         )}
 
-        <div className="rounded-lg border bg-card">
-          <table className="w-full text-left text-sm">
+        <div className="rounded-lg border bg-card overflow-x-auto">
+          <table className="min-w-[980px] w-full table-fixed text-left text-sm">
             <thead className="border-b bg-muted/50">
               <tr>
-                <th className="w-10 px-4 py-3 text-center font-medium">
-                  {filteredData.length > 0 ? (
-                    <label className="flex cursor-pointer items-center justify-center gap-1.5">
-                      <input
-                        type="checkbox"
-                        checked={allFilteredSelected}
-                        onChange={toggleSelectAll}
-                        className="h-4 w-4 rounded border-input"
-                        title={allFilteredSelected ? "取消全选" : "全选当前页"}
-                      />
-                      <span className="sr-only">{allFilteredSelected ? "取消全选" : "全选当前页"}</span>
-                    </label>
-                  ) : null}
-                </th>
-                <th className="w-10 px-4 py-3 text-center font-medium"></th>
-                <th className="px-4 py-3 text-center font-medium">客户名称</th>
-                <th className="px-4 py-3 text-center font-medium">联系人</th>
-                <th className="px-4 py-3 text-center font-medium">城市</th>
-                <th className="px-4 py-3 text-center font-medium">行业</th>
-                <th className="px-4 py-3 text-center font-medium">线索来源</th>
-                <th className="px-4 py-3 text-center font-medium">联系方式</th>
-                <th className="px-4 py-3 text-center font-medium">创建日期</th>
-                <th className="px-4 py-3 text-center font-medium">销售人员</th>
-                <th className="px-4 py-3 text-center font-medium">状态</th>
-                <th className="px-4 py-3 text-center font-medium" title="线索→商机→客户，高亮为当前阶段">
+                <th className="w-10 px-4 py-3" aria-label="选择" />
+                <th className="w-[170px] px-4 py-3 text-center font-medium">客户名称</th>
+                <th className="w-[120px] px-4 py-3 text-center font-medium">联系人</th>
+                <th className="w-[96px] px-4 py-3 text-center font-medium">城市</th>
+                <th className="w-[110px] px-4 py-3 text-center font-medium">行业</th>
+                <th className="w-[130px] px-4 py-3 text-center font-medium">线索来源</th>
+                <th className="w-[130px] px-4 py-3 text-center font-medium">联系方式</th>
+                <th className="w-[120px] px-4 py-3 text-center font-medium">创建日期</th>
+                <th className="w-[130px] px-4 py-3 text-center font-medium">销售人员</th>
+                <th className="w-[110px] px-4 py-3 text-center font-medium">状态</th>
+                <th className="w-[120px] px-4 py-3 text-center font-medium" title="线索→商机→客户，高亮为当前阶段">
                   流转阶段
                 </th>
-                <th className="px-4 py-3 text-center font-medium">操作</th>
+                <th className="w-[130px] px-4 py-3 text-center font-medium">操作</th>
               </tr>
             </thead>
             <tbody className="[&_td]:text-center">
-              {rows.length === 0 ? (
+              {displayedData.length === 0 && !hasActiveFilters ? (
                 <tr>
                   <td
-                    colSpan={13}
+                    colSpan={12}
                     className="px-4 py-8 text-center text-muted-foreground"
                   >
                     暂无数据，点击「新建线索」增加一行后在表格内编辑
                   </td>
                 </tr>
-              ) : filteredData.length === 0 ? (
+              ) : displayedData.length === 0 && hasActiveFilters ? (
                 <tr>
                   <td
-                    colSpan={13}
+                    colSpan={12}
                     className="px-4 py-8 text-center text-muted-foreground"
                   >
                     没有符合筛选条件的数据
                   </td>
                 </tr>
               ) : (
-                filteredData.map((lead) => (
+                displayedData.map((lead) => (
                   <Fragment key={lead.id}>
                     <tr
                       id={`lead-row-${lead.id}`}
                       className={`border-b last:border-0 hover:bg-muted/30 ${highlightId === lead.id ? "animate-highlight-row" : ""} ${selectedIds.has(lead.id) ? "bg-primary/5" : ""}`}
                     >
-                      <td className="px-4 py-3">
-                        <label className="flex cursor-pointer items-center justify-center">
-                          <input
-                            type="checkbox"
-                            checked={selectedIds.has(lead.id)}
-                            onChange={() => toggleSelectOne(lead.id)}
-                            className="h-4 w-4 rounded border-input"
-                            onClick={(e) => e.stopPropagation()}
-                          />
-                        </label>
-                      </td>
-                      <td className="px-4 py-3">
-                        <button
-                          onClick={() => toggleExpandedLead(lead.id)}
-                          className="text-gray-500 hover:text-gray-700"
-                        >
-                          {expandedLeadIds.has(lead.id) ? (
-                            <ChevronUp className="h-4 w-4" />
-                          ) : (
-                            <ChevronDown className="h-4 w-4" />
-                          )}
-                        </button>
-                      </td>
+                      <LeadRowCheckbox
+                        leadId={lead.id}
+                        checked={selectedIds.has(lead.id)}
+                        onToggle={toggleSelectOne}
+                      />
                       <td className="px-4 py-3">
                         <div className="flex justify-center">
                           <div className="relative inline-flex items-center">
@@ -941,9 +1120,7 @@ export function LeadsTableWithBulk({
                             {renderLeadCell(
                               lead,
                               "customerName",
-                              lead.customerName.length > MAX_CUSTOMER_NAME_DISPLAY
-                                ? `${lead.customerName.slice(0, MAX_CUSTOMER_NAME_DISPLAY)}...`
-                                : lead.customerName,
+                              lead.customerName,
                               { title: lead.customerName }
                             )}
                           </div>
@@ -1008,7 +1185,7 @@ export function LeadsTableWithBulk({
                             )
                           }
                           onSuccess={(newStatus) => {
-                            if (newStatus === "有意向") router.refresh();
+                            if (newStatus === "有意向") doRefresh();
                           }}
                         />
                       </td>
@@ -1070,6 +1247,14 @@ export function LeadsTableWithBulk({
                                 <FileText className="mr-2 h-4 w-4" />
                                 查看记录
                               </DropdownMenuItem>
+                              <DropdownMenuItem onClick={() => toggleExpandedLead(lead.id)}>
+                                {expandedLeadIds.has(lead.id) ? (
+                                  <ChevronUp className="mr-2 h-4 w-4" />
+                                ) : (
+                                  <ChevronDown className="mr-2 h-4 w-4" />
+                                )}
+                                {expandedLeadIds.has(lead.id) ? "收起跟进时间线" : "展开跟进时间线"}
+                              </DropdownMenuItem>
                               {lead.opportunity && canEditLead(lead) && (
                                 <DropdownMenuItem asChild>
                                   <Link
@@ -1129,7 +1314,7 @@ export function LeadsTableWithBulk({
                     </tr>
                     {expandedLeadIds.has(lead.id) && (
                       <tr>
-                        <td colSpan={13} className="bg-gray-50 px-4 py-4 !text-left">
+                        <td colSpan={12} className="bg-gray-50 px-4 py-4 !text-left">
                           <div className="rounded-lg border border-gray-200 bg-white p-4 text-left">
                             <h4 className="mb-3 font-semibold text-gray-900 text-left">
                               跟进时间线
@@ -1265,7 +1450,7 @@ export function LeadsTableWithBulk({
                 className="gap-2"
               >
                 {batchAssignLoading ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <LoadingSpinner type="arc" size={16} className="shrink-0" />
                 ) : null}
                 确定
               </Button>
@@ -1360,7 +1545,7 @@ export function LeadsTableWithBulk({
                                 )
                               }
                               onSuccess={(newStatus) => {
-                                if (newStatus === "有意向") router.refresh();
+                                if (newStatus === "有意向") doRefresh();
                               }}
                             />
                           )}
@@ -1370,6 +1555,43 @@ export function LeadsTableWithBulk({
                         </div>
                       </div>
                     ))}
+
+                    {(lead.importSource ||
+                      (lead.extraFields &&
+                        typeof lead.extraFields === "object" &&
+                        !Array.isArray(lead.extraFields) &&
+                        Object.keys(lead.extraFields).length > 0)) && (
+                        <div className="mt-4 space-y-2 rounded-lg border bg-muted/40 p-3 text-xs text-muted-foreground">
+                          <div className="font-medium text-foreground">其他信息（只读）</div>
+                          {lead.importSource && (
+                            <div>
+                              <span className="font-medium">导入来源：</span>
+                              <span>{lead.importSource}</span>
+                            </div>
+                          )}
+                          {lead.extraFields &&
+                            typeof lead.extraFields === "object" &&
+                            !Array.isArray(lead.extraFields) &&
+                            Object.keys(lead.extraFields).length > 0 && (
+                              <div className="mt-1 space-y-1">
+                                {Object.entries(lead.extraFields as Record<string, unknown>).map(
+                                  ([key, value]) => (
+                                    <div key={key} className="flex gap-1">
+                                      <span className="min-w-[72px] shrink-0 text-muted-foreground">
+                                        {key}：
+                                      </span>
+                                      <span className="break-all">
+                                        {typeof value === "object"
+                                          ? JSON.stringify(value)
+                                          : String(value ?? "")}
+                                      </span>
+                                    </div>
+                                  )
+                                )}
+                              </div>
+                            )}
+                        </div>
+                      )}
                   </div>
                 </>
               );
@@ -1383,7 +1605,7 @@ export function LeadsTableWithBulk({
           onOpenChange={(open) => {
             if (!open) {
               setSyncToCustomerDialog(null);
-              router.refresh();
+              doRefresh();
             }
           }}
         >
@@ -1481,7 +1703,7 @@ export function LeadsTableWithBulk({
                 variant="outline"
                 onClick={() => {
                   setSyncToCustomerDialog(null);
-                  router.refresh();
+                  doRefresh();
                 }}
                 disabled={isSyncingToCustomer}
               >
@@ -1509,7 +1731,7 @@ export function LeadsTableWithBulk({
                         tasks.push(syncLeadContactPhoneToOpportunityAction(d.opportunityId, d.newValue));
                       if (tasks.length === 0) {
                         setSyncToCustomerDialog(null);
-                        router.refresh();
+                        doRefresh();
                         return;
                       }
                       const results = await Promise.all(tasks);
@@ -1524,11 +1746,11 @@ export function LeadsTableWithBulk({
                       showAlert(`联系方式已同步到${parts.join("、")}`, { type: "success", title: "已同步" });
                     } else {
                       setSyncToCustomerDialog(null);
-                      router.refresh();
+                      doRefresh();
                       return;
                     }
                     setSyncToCustomerDialog(null);
-                    router.refresh();
+                    doRefresh();
                   } catch (e) {
                     console.error(e);
                     showAlert("同步失败，请重试", { type: "error", title: "同步失败" });

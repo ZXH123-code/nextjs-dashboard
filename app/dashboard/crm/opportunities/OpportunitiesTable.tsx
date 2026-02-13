@@ -34,7 +34,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
-import { ChevronDown, ChevronUp, MessageSquarePlus, User, ExternalLink, Filter, MoreHorizontal, X, Check, UserRound, Building2, Star, FileText } from "lucide-react";
+import { ChevronDown, MessageSquarePlus, User, ExternalLink, Filter, MoreHorizontal, X, Check, UserRound, Building2, Star, FileText } from "lucide-react";
 import { OPPORTUNITY_STATUS } from "@/app/lib/crm-constants";
 import { cn } from "@/lib/utils";
 
@@ -102,6 +102,8 @@ export function OpportunitiesTable({
   const [isSyncingContactPhone, setIsSyncingContactPhone] = useState(false);
   /** 查看详细记录：右侧滑层展示的商机 id */
   const [detailOppId, setDetailOppId] = useState<string | null>(null);
+  /** 多选仅作结构一致（与线索表对齐），无批量操作 */
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
   // 定义筛选字段 - 包含商机表的所有有意义的字段
   const filterFields: FilterField[] = [
@@ -148,6 +150,20 @@ export function OpportunitiesTable({
       else next.add(id);
       return next;
     });
+  };
+
+  const toggleSelectOne = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+  const allFilteredSelected = filteredData.length > 0 && filteredData.every((o) => selectedIds.has(o.id));
+  const toggleSelectAll = () => {
+    if (allFilteredSelected) setSelectedIds(new Set());
+    else setSelectedIds(new Set(filteredData.map((o) => o.id)));
   };
 
   useEffect(() => {
@@ -348,6 +364,20 @@ export function OpportunitiesTable({
     }
   };
 
+  /** 与线索表一致的列内文案最大宽度（截断显示） */
+  const getFieldTextMaxWidthClass = (field: string) => {
+    switch (field) {
+      case "name": return "max-w-[135px]";
+      case "productType": return "max-w-[110px]";
+      case "amount": return "max-w-[110px]";
+      case "contactPhone": return "max-w-[130px]";
+      case "expectedCloseDate": return "max-w-[110px]";
+      case "salesPersonId":
+      case "deliveryPersonId": return "max-w-[130px]";
+      default: return "max-w-[140px]";
+    }
+  };
+
   const renderEditableCell = (
     opp: Opportunity,
     field: string,
@@ -414,9 +444,21 @@ export function OpportunitiesTable({
           alignLeft ? "justify-start text-left" : "justify-center",
           isSaving ? "cursor-wait opacity-60" : "cursor-pointer hover:bg-blue-50"
         )}
-        title={isSaving ? "保存中..." : "点击编辑"}
+        title={isSaving ? "保存中..." : (displayValue || "点击编辑")}
       >
-        <span>{displayValue || <span className="text-muted-foreground">-</span>}</span>
+        {displayValue ? (
+          <span
+            className={cn(
+              "inline-block w-full min-w-0 truncate whitespace-nowrap align-middle",
+              getFieldTextMaxWidthClass(field)
+            )}
+            title={displayValue}
+          >
+            {displayValue}
+          </span>
+        ) : (
+          <span className="text-muted-foreground">-</span>
+        )}
         {isSaving && (
           <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-blue-500 border-t-transparent" />
         )}
@@ -481,24 +523,37 @@ export function OpportunitiesTable({
         onClear={clearFilter}
       />
 
-      <div className="rounded-lg border bg-card">
-        <table className="w-full text-left text-sm">
+      <div className="rounded-lg border bg-card overflow-x-auto">
+        <table className="min-w-[980px] w-full table-fixed text-left text-sm">
           <thead className="border-b bg-muted/50">
             <tr>
-              <th className="w-10 px-4 py-3 text-center font-medium"></th>
-              <th className="px-4 py-3 text-center font-medium">商机名称</th>
-              <th className="px-4 py-3 text-center font-medium">产品类型</th>
-              <th className="px-4 py-3 text-center font-medium">商机金额</th>
-              <th className="px-4 py-3 text-center font-medium">联系方式</th>
-              <th className="px-4 py-3 text-center font-medium">创建日期</th>
-              <th className="px-4 py-3 text-center font-medium">预计赢单日期</th>
-              <th className="px-4 py-3 text-center font-medium">销售人员</th>
-              <th className="px-4 py-3 text-center font-medium">交付负责人</th>
-              <th className="px-4 py-3 text-center font-medium">状态</th>
-              <th className="px-4 py-3 text-center font-medium" title="该列可点击跳转到线索并高亮">
+              <th className="w-10 px-4 py-3 text-center font-medium">
+                {filteredData.length > 0 ? (
+                  <label className="flex cursor-pointer items-center justify-center gap-1.5">
+                    <input
+                      type="checkbox"
+                      checked={allFilteredSelected}
+                      onChange={toggleSelectAll}
+                      className="h-4 w-4 rounded border-input"
+                      title={allFilteredSelected ? "取消全选" : "全选当前页"}
+                    />
+                    <span className="sr-only">{allFilteredSelected ? "取消全选" : "全选当前页"}</span>
+                  </label>
+                ) : null}
+              </th>
+              <th className="w-[170px] px-4 py-3 text-center font-medium">商机名称</th>
+              <th className="w-[110px] px-4 py-3 text-center font-medium">产品类型</th>
+              <th className="w-[120px] px-4 py-3 text-center font-medium">商机金额</th>
+              <th className="w-[130px] px-4 py-3 text-center font-medium">联系方式</th>
+              <th className="w-[120px] px-4 py-3 text-center font-medium">创建日期</th>
+              <th className="w-[120px] px-4 py-3 text-center font-medium">预计赢单日期</th>
+              <th className="w-[130px] px-4 py-3 text-center font-medium">销售人员</th>
+              <th className="w-[130px] px-4 py-3 text-center font-medium">交付负责人</th>
+              <th className="w-[110px] px-4 py-3 text-center font-medium">状态</th>
+              <th className="w-[120px] px-4 py-3 text-center font-medium" title="该列可点击跳转到线索并高亮">
                 来源线索
               </th>
-              <th className="px-4 py-3 text-center font-medium">操作</th>
+              <th className="w-[130px] px-4 py-3 text-center font-medium">操作</th>
             </tr>
           </thead>
           <tbody className="[&_td]:text-center">
@@ -525,20 +580,19 @@ export function OpportunitiesTable({
                 <Fragment key={opp.id}>
                   <tr
                     id={`opp-row-${opp.id}`}
-                    className={`border-b last:border-0 hover:bg-muted/30 ${highlightId === opp.id ? "animate-highlight-row" : ""
-                      }`}
+                    className={`border-b last:border-0 hover:bg-muted/30 ${highlightId === opp.id ? "animate-highlight-row" : ""} ${selectedIds.has(opp.id) ? "bg-primary/5" : ""}`}
                   >
                     <td className="px-4 py-3">
-                      <button
-                        onClick={() => toggleExpandedOpp(opp.id)}
-                        className="text-gray-500 hover:text-gray-700"
-                      >
-                        {expandedOppIds.has(opp.id) ? (
-                          <ChevronUp className="h-4 w-4" />
-                        ) : (
-                          <ChevronDown className="h-4 w-4" />
-                        )}
-                      </button>
+                      <label className="flex cursor-pointer items-center justify-center gap-1.5">
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.has(opp.id)}
+                          onChange={() => toggleSelectOne(opp.id)}
+                          className="h-4 w-4 rounded border-input"
+                          title={selectedIds.has(opp.id) ? "取消选择" : "选择"}
+                        />
+                        <span className="sr-only">{selectedIds.has(opp.id) ? "取消选择" : "选择"}</span>
+                      </label>
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex justify-center">
@@ -658,10 +712,10 @@ export function OpportunitiesTable({
                       {opp.lead ? (
                         <Link
                           href={`/dashboard/crm/leads?highlight=${opp.lead.id}`}
-                          className="inline-flex items-center justify-center gap-1 text-primary underline decoration-primary/50 hover:decoration-primary cursor-pointer"
-                          title="点击跳转到线索并高亮"
+                          className="inline-flex max-w-[120px] items-center justify-center gap-1 truncate text-primary underline decoration-primary/50 hover:decoration-primary cursor-pointer"
+                          title={opp.lead.customerName || "点击跳转到线索并高亮"}
                         >
-                          {opp.lead.customerName}
+                          <span className="min-w-0 truncate">{opp.lead.customerName}</span>
                           <ExternalLink className="h-3.5 w-3.5 shrink-0 opacity-70" />
                         </Link>
                       ) : (
@@ -689,6 +743,10 @@ export function OpportunitiesTable({
                             <DropdownMenuItem onClick={() => setDetailOppId(opp.id)}>
                               <FileText className="mr-2 h-4 w-4" />
                               查看详细记录
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => toggleExpandedOpp(opp.id)}>
+                              <ChevronDown className="mr-2 h-4 w-4" />
+                              {expandedOppIds.has(opp.id) ? "收起跟进时间线" : "展开跟进时间线"}
                             </DropdownMenuItem>
                             {opp.customer && (
                               <DropdownMenuItem asChild>

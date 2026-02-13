@@ -17,7 +17,6 @@ async function checkCrmPermission(
 import {
   createLead,
   createOpportunity,
-  createCustomer,
   createFollowUp,
   updateCustomer,
   updateLead,
@@ -41,7 +40,9 @@ import {
   getCrmAuth,
   getFollowUpByIdIfVisible,
   globalSearchCrm,
+  getLeadIds,
 } from "./crm";
+import type { LeadFilter } from "./crm";
 import { sendLeadAssignmentNotification } from "./email";
 
 // 创建线索：admin 可指定负责人，sales 新建时负责人固定为自己
@@ -493,32 +494,6 @@ export async function convertOpportunityToCustomerAction(opportunityId: string) 
   revalidatePath("/dashboard");
 }
 
-// 创建客户（销售人员从下拉选择，未选则用当前用户）
-export async function createCustomerAction(formData: FormData) {
-  const name = formData.get("name") as string;
-  if (!name?.trim()) return { error: "客户名称必填" };
-  const session = await auth();
-  let salesPersonId = (formData.get("salesPersonId") as string) || undefined;
-  if (!salesPersonId) salesPersonId = (session?.user as { id?: string })?.id ?? undefined;
-
-  await createCustomer({
-    name: name.trim(),
-    nickname: (formData.get("nickname") as string) || undefined,
-    city: (formData.get("city") as string) || undefined,
-    customerTier: (formData.get("customerTier") as string) || undefined,
-    industry: (formData.get("industry") as string) || undefined,
-    employeeCount: (formData.get("employeeCount") as string) || undefined,
-    tags: (formData.get("tags") as string) || undefined,
-    mainProducts: (formData.get("mainProducts") as string) || undefined,
-    status: (formData.get("status") as string) || "已签约",
-    actualAmount: undefined,
-    salesPersonId,
-  });
-  revalidatePath("/dashboard/crm/customers");
-  revalidatePath("/dashboard");
-  redirect("/dashboard/crm/customers");
-}
-
 // 更新客户（表格行内编辑，仅 admin 或该客户负责人可编辑）
 export async function updateCustomerAction(
   _prevState: { error?: string } | null,
@@ -560,7 +535,6 @@ export async function updateCustomerAction(
     name,
     nickname: (formData.get("nickname") as string) || undefined,
     city: (formData.get("city") as string) || undefined,
-    customerTier: (formData.get("customerTier") as string) || undefined,
     industry: (formData.get("industry") as string) || undefined,
     firstMaintenanceDate,
     employeeCount: (formData.get("employeeCount") as string) || undefined,
@@ -881,6 +855,29 @@ export async function updateLeadSalesPersonWithFollowUpAction(
   revalidatePath("/dashboard/crm/leads");
   revalidatePath("/dashboard");
   return { success: true };
+}
+
+function decodeLeadFilter(filterParam: string | undefined): LeadFilter | undefined {
+  if (!filterParam?.trim()) return undefined;
+  try {
+    const decoded = decodeURIComponent(filterParam);
+    const parsed = JSON.parse(decoded) as LeadFilter;
+    if (!parsed?.groups) return undefined;
+    return parsed;
+  } catch {
+    return undefined;
+  }
+}
+
+/** 按当前筛选条件返回线索 id 列表（用于「全选」），供前端多选用 */
+export async function getLeadIdsAction(
+  filterParam: string | undefined
+): Promise<{ error?: string } | { ids: string[]; total: number }> {
+  const auth = await getCrmAuth();
+  if (!auth) return { error: "请先登录" };
+  const filter = decodeLeadFilter(filterParam);
+  const { ids, total } = await getLeadIds(auth, filter);
+  return { ids, total };
 }
 
 /** 批量分配销售人员时创建跟进记录（更新版本）。仅对「负责人发生变化」的线索执行更新与跟进，已是该负责人的线索跳过。 */

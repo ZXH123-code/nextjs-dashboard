@@ -1,5 +1,6 @@
 "use server";
 
+import { randomInt } from "node:crypto";
 import { z } from "zod";
 import { redirect } from "next/navigation";
 import { signIn, signOut } from "@/auth";
@@ -8,9 +9,61 @@ import bcrypt from "bcryptjs";
 import { revalidatePath } from "next/cache";
 import { auth } from "@/auth";
 import { prisma } from "@/app/lib/prisma";
+import { sendVerificationCodeEmail } from "@/app/lib/email";
 
 export async function logout() {
   await signOut();
+}
+
+const COOLDOWN_SEC = 60;
+const CODE_EXPIRY_MIN = 15;
+
+/** 发送注册验证码（60 秒冷却，15 分钟有效） */
+export async function sendVerificationCodeAction(
+  email: string
+): Promise<{ success: true } | { success: false; error: string }> {
+  const parsed = z.string().email().safeParse(email?.trim());
+  if (!parsed.success) {
+    return { success: false, error: "请输入有效的邮箱地址" };
+  }
+  const normalizedEmail = parsed.data.toLowerCase();
+
+  try {
+    const existing = await prisma.users.findUnique({ where: { email: normalizedEmail } });
+    if (existing) {
+      return { success: false, error: "该邮箱已被注册" };
+    }
+
+    const now = new Date();
+    const existingCode = await prisma.email_verification_code.findUnique({
+      where: { email_purpose: { email: normalizedEmail, purpose: "signup" } },
+    });
+    if (existingCode) {
+      const elapsed = (now.getTime() - existingCode.createdAt.getTime()) / 1000;
+      if (elapsed < COOLDOWN_SEC) {
+        const remain = Math.ceil(COOLDOWN_SEC - elapsed);
+        return { success: false, error: `请 ${remain} 秒后再试` };
+      }
+    }
+
+    const code = randomInt(0, 1_000_000).toString().padStart(6, "0");
+    const expiresAt = new Date(now.getTime() + CODE_EXPIRY_MIN * 60 * 1000);
+
+    await prisma.email_verification_code.upsert({
+      where: { email_purpose: { email: normalizedEmail, purpose: "signup" } },
+      create: { email: normalizedEmail, code, purpose: "signup", expiresAt },
+      update: { code, expiresAt, createdAt: now },
+    });
+
+    const result = await sendVerificationCodeEmail(normalizedEmail, code);
+    if (!result.success) {
+      return { success: false, error: result.error ?? "邮件发送失败" };
+    }
+    return { success: true };
+  } catch (e) {
+    console.error("sendVerificationCode:", e);
+    return { success: false, error: "发送失败，请稍后重试" };
+  }
 }
 
 export async function authenticate(prevState: string | undefined, formData: FormData) {
@@ -37,6 +90,7 @@ export async function register(prevState: string | undefined, formData: FormData
       email: z.string().email("请输入有效的邮箱地址"),
       password: z.string().min(6, "密码至少需要6个字符"),
       confirmPassword: z.string().min(6, "确认密码至少需要6个字符"),
+      verificationCode: z.string().length(6, "验证码为6位数字").regex(/^\d{6}$/, "验证码为6位数字"),
     })
     .refine((data) => data.password === data.confirmPassword, {
       message: "密码和确认密码不匹配",
@@ -48,41 +102,27 @@ export async function register(prevState: string | undefined, formData: FormData
     email: formData.get("email"),
     password: formData.get("password"),
     confirmPassword: formData.get("confirmPassword"),
+    verificationCode: formData.get("verificationCode"),
   });
 
   if (!validatedFields.success) {
     const errors = validatedFields.error.flatten().fieldErrors;
-    /*
-    扁平化后的结构（.flatten().fieldErrors）
-      {
-      name: ["姓名不能为空"],
-      email: ["请输入有效的邮箱地址"],
-      confirmPassword: ["密码和确认密码不匹配"]
-      }
-    */
     if (errors.confirmPassword) {
       return errors.confirmPassword[0];
     }
-    /*
-    Object.values(errors)
-    结果：
-    [
-    ["姓名不能为空"],
-    ["请输入有效的邮箱地址"],
-    ["密码至少需要6个字符"]
-    ]
-    flat() 方法将数组扁平化，结果：
-    ["姓名不能为空", "请输入有效的邮箱地址", "密码至少需要6个字符"]
-    */
+    if (errors.verificationCode) {
+      return errors.verificationCode[0];
+    }
     return Object.values(errors).flat()[0] || "表单验证失败";
   }
 
-  const { name, email, password } = validatedFields.data;
+  const { name, email, password, verificationCode } = validatedFields.data;
+  const normalizedEmail = email.toLowerCase();
 
   // 2. 检查邮箱是否已存在
   try {
     const existingUser = await prisma.users.findUnique({
-      where: { email },
+      where: { email: normalizedEmail },
     });
     if (existingUser) {
       return "该邮箱已被注册";
@@ -92,22 +132,45 @@ export async function register(prevState: string | undefined, formData: FormData
     return "数据库错误：无法检查邮箱";
   }
 
-  // 3. 加密密码并创建用户
+  // 3. 校验验证码
+  try {
+    const record = await prisma.email_verification_code.findUnique({
+      where: { email_purpose: { email: normalizedEmail, purpose: "signup" } },
+    });
+    if (!record) {
+      return "请先获取验证码";
+    }
+    if (record.expiresAt < new Date()) {
+      return "验证码已过期，请重新获取";
+    }
+    if (record.code !== verificationCode) {
+      return "验证码错误";
+    }
+  } catch (error) {
+    console.error("Database Error:", error);
+    return "数据库错误：验证失败";
+  }
+
+  // 4. 加密密码并创建用户
   try {
     const hashedPassword = await bcrypt.hash(password, 10);
     await prisma.users.create({
       data: {
         name,
-        email,
+        email: normalizedEmail,
         password: hashedPassword,
       },
+    });
+    // 删除已用验证码（单次有效）
+    await prisma.email_verification_code.deleteMany({
+      where: { email: normalizedEmail, purpose: "signup" },
     });
   } catch (error) {
     console.error("Database Error:", error);
     return "数据库错误：注册失败";
   }
 
-  // 4. 注册成功，重定向到登录页面
+  // 5. 注册成功，重定向到登录页面
   redirect("/login?registered=true");
 }
 

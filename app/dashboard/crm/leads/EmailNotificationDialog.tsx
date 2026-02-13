@@ -12,7 +12,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Loader2, Mail, CheckCircle2, XCircle, UserPlus, UserMinus } from "lucide-react";
+import { Mail, CheckCircle2, XCircle, UserPlus, UserMinus } from "lucide-react";
+import { LoadingSpinner } from "@/app/ui/loading-spinner";
 
 type SalesPersonMap = Record<
   string,
@@ -162,7 +163,7 @@ export function EmailNotificationDialog({
               <Button onClick={handleSend} disabled={sending}>
                 {sending ? (
                   <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    <LoadingSpinner type="arc" size={16} className="mr-2 shrink-0" />
                     发送中...
                   </>
                 ) : (

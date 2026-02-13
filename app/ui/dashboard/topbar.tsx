@@ -142,19 +142,21 @@ export default function TopBar({ userName, userId }: { userName?: string; userId
       if (sectionOnly) {
         setSearchSectionLoading((prev) => ({ ...prev, [sectionOnly]: true }));
       } else {
+        // 新搜索开始时先清空结果，避免短暂显示上一次结果或全 0 的闪屏
+        setSearchResult(null);
         setSearchLoading(true);
       }
       try {
         const res = await globalSearchCrmAction(keyword.trim(), leadPage, oppPage, customerPage);
         if (searchClosedRef.current) return;
-        setSearchResult(res ?? { leads: { items: [], total: 0 }, opportunities: { items: [], total: 0 }, customers: { items: [], total: 0 } });
+        // 仅在有有效数据时更新；null/undefined 时保持为 null，由 UI 显示「未找到相关记录」
+        if (res) {
+          setSearchResult(res);
+        }
       } catch {
         if (searchClosedRef.current) return;
-        setSearchResult({
-          leads: { items: [], total: 0 },
-          opportunities: { items: [], total: 0 },
-          customers: { items: [], total: 0 },
-        });
+        // 错误时不展示三栏 0 条，保持 null，显示「未找到相关记录」
+        setSearchResult(null);
       } finally {
         if (!searchClosedRef.current) {
           if (sectionOnly) {

@@ -4,7 +4,7 @@ import Link from "next/link";
 import NavLinks from "@/app/ui/dashboard/nav-links";
 import { LogOut, ChevronLeft } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useState, createContext, useContext } from "react";
+import { useState, createContext, useContext, useEffect } from "react";
 import { logout } from "@/app/lib/auth-actions";
 
 // 创建 Context 来共享折叠状态
@@ -12,24 +12,28 @@ export const SidebarContext = createContext<{
   collapsed: boolean;
   setCollapsed: (collapsed: boolean) => void;
 }>({
-  collapsed: true,
+  collapsed: false,
   setCollapsed: () => { },
 });
 
 export const useSidebar = () => useContext(SidebarContext);
 
 export default function SideNav({ role = "sales" }: { role?: string }) {
-  const [collapsed, setCollapsed] = useState(true);
+  const [collapsed, setCollapsed] = useState(false);
+  // 水合前与首帧统一按「展开」渲染，避免服务端/客户端 HTML 不一致导致 Hydration 报错
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+  const effectiveCollapsed = mounted ? collapsed : false;
 
   return (
-    <SidebarContext.Provider value={{ collapsed, setCollapsed }}>
+    <SidebarContext.Provider value={{ collapsed: effectiveCollapsed, setCollapsed }}>
       {/* 外层容器 - 允许折叠按钮溢出 */}
       <div className="relative h-full">
         <aside
           className={cn(
             "relative h-full flex flex-col overflow-visible sidebar-transition",
             "bg-[var(--sidebar-bg)] text-[var(--sidebar-text)]",
-            collapsed ? "w-[75px]" : "w-64"
+            effectiveCollapsed ? "w-[75px]" : "w-64"
           )}
         >
           {/* 折叠按钮 - 固定在右边缘中心，横跨边界 */}
@@ -47,7 +51,7 @@ export default function SideNav({ role = "sales" }: { role?: string }) {
             <ChevronLeft
               className={cn(
                 "w-4 h-4 transition-transform duration-300",
-                collapsed && "rotate-180"
+                effectiveCollapsed && "rotate-180"
               )}
             />
           </button>
@@ -64,7 +68,7 @@ export default function SideNav({ role = "sales" }: { role?: string }) {
                 className={cn(
                   "text-xl font-semibold text-[var(--sidebar-text-hover)] whitespace-nowrap overflow-hidden",
                   "sidebar-content-transition",
-                  collapsed ? "opacity-0 w-0" : "opacity-100"
+                  effectiveCollapsed ? "opacity-0 w-0" : "opacity-100"
                 )}
               >
                 CRM 系统
@@ -74,14 +78,14 @@ export default function SideNav({ role = "sales" }: { role?: string }) {
 
           {/* 导航链接区域 - 允许弹出菜单溢出 */}
           <div className="flex-1 overflow-y-auto overflow-x-visible sidebar-scroll py-2">
-            <NavLinks collapsed={collapsed} role={role} />
+            <NavLinks collapsed={effectiveCollapsed} role={role} />
           </div>
 
           {/* Footer 区域 */}
           <div
             className={cn(
               "px-5 py-4 sidebar-content-transition",
-              collapsed ? "opacity-0 hidden" : "opacity-100"
+              effectiveCollapsed ? "opacity-0 hidden" : "opacity-100"
             )}
           >
             <div className="bg-[var(--sidebar-footer-bg)] rounded-lg p-4 text-center text-xs">
@@ -101,14 +105,14 @@ export default function SideNav({ role = "sales" }: { role?: string }) {
                   "flex w-full h-12 items-center gap-3 rounded-md px-5 icon-swing",
                   "text-[var(--sidebar-text)] transition-colors",
                   "hover:text-[var(--sidebar-text-hover)] hover:bg-[var(--sidebar-bg-secondary)]",
-                  collapsed && "justify-center px-0"
+                  effectiveCollapsed && "justify-center px-0"
                 )}
               >
                 <LogOut className="menu-icon h-5 w-5 flex-shrink-0" />
                 <span
                   className={cn(
                     "text-sm whitespace-nowrap sidebar-content-transition",
-                    collapsed ? "opacity-0 w-0 hidden" : "opacity-100"
+                    effectiveCollapsed ? "opacity-0 w-0 hidden" : "opacity-100"
                   )}
                 >
                   登出

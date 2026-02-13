@@ -13,7 +13,8 @@ import {
 } from "@/components/ui/select";
 import { useConfirm } from "@/hooks/use-confirm";
 import { useAlert } from "@/hooks/use-alert";
-import { Loader2, UserPlus, Trash2, X } from "lucide-react";
+import { UserPlus, Trash2, X } from "lucide-react";
+import { LoadingSpinner } from "@/app/ui/loading-spinner";
 
 type User = { id: string; name: string };
 
@@ -110,7 +111,7 @@ export function CustomersBulkBar({
             className="gap-1.5"
           >
             {assignLoading ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
+              <LoadingSpinner type="arc" size={16} className="shrink-0" />
             ) : (
               <UserPlus className="h-4 w-4" />
             )}
@@ -125,7 +126,7 @@ export function CustomersBulkBar({
           disabled={deleteLoading}
         >
           {deleteLoading ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
+            <LoadingSpinner type="arc" size={16} className="shrink-0" />
           ) : (
             <Trash2 className="h-4 w-4" />
           )}
