@@ -7,10 +7,13 @@
     "start": "next start",
     "db:generate": "prisma generate",
     "db:push": "prisma db push",
+    "db:push:local": "dotenv -e .env.local -- prisma db push",
     "db:migrate": "prisma migrate dev",
+    "db:migrate:local": "dotenv -e .env.local -- prisma migrate dev",
+    "db:migrate:resolve-rolled-back:local": "dotenv -e .env.local -- prisma migrate resolve --rolled-back",
+    "db:migrate:reset:local": "dotenv -e .env.local -- prisma migrate reset",
     "db:studio": "prisma studio",
-    "db:seed": "prisma db seed",
-    "seed": "tsx app/seed/seed.ts"
+    "db:studio:local": "dotenv -e .env.local -- prisma studio"
   },
   "dependencies": {
     "@ai-sdk/openai": "^3.0.26",
@@ -55,12 +58,10 @@
     "@types/react": "19.0.7",
     "@types/react-dom": "19.0.3",
     "baseline-browser-mapping": "^2.9.14",
+    "dotenv-cli": "^11.0.0",
     "prisma": "^6.19.2",
     "tailwindcss-animate": "^1.0.7",
     "tsx": "^4.21.0"
-  },
-  "prisma": {
-    "seed": "tsx app/seed/seed.ts"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

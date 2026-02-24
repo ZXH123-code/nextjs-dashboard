@@ -41,6 +41,7 @@ import {
   getFollowUpByIdIfVisible,
   globalSearchCrm,
   getLeadIds,
+  getPageForNewLead,
 } from "./crm";
 import type { LeadFilter } from "./crm";
 import { sendLeadAssignmentNotification } from "./email";
@@ -79,21 +80,42 @@ export async function createLeadAction(formData: FormData) {
   redirect("/dashboard/crm/leads");
 }
 
+function decodeFilter(filterStr: string | undefined): LeadFilter | undefined {
+  if (!filterStr?.trim()) return undefined;
+  try {
+    const decoded = decodeURIComponent(filterStr);
+    const parsed = JSON.parse(decoded) as LeadFilter;
+    return parsed?.groups ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** 新建一条空线索，用于表格内直接增加一行并行内编辑。admin 可不指定负责人，sales 默认为自己 */
-export async function createEmptyLeadAction(): Promise<{ error?: string }> {
+export async function createEmptyLeadAction(options?: {
+  pageSize?: number;
+  filterParam?: string;
+}): Promise<{ error?: string; leadId?: string; page?: number }> {
   const session = await auth();
   const userId = (session?.user as { id?: string })?.id;
   const role = (session?.user as { role?: string })?.role ?? "sales";
   if (!userId) return { error: "请先登录" };
 
-  await createLead({
+  const lead = await createLead({
     customerName: "（待补全）",
     status: "未跟进",
     salesPersonId: role === "sales" ? userId : undefined,
   });
   revalidatePath("/dashboard/crm/leads");
   revalidatePath("/dashboard");
-  return {};
+
+  let page = 1;
+  if (options?.pageSize != null && options.pageSize >= 1) {
+    const auth = await getCrmAuth();
+    const filter = decodeFilter(options.filterParam);
+    page = await getPageForNewLead(auth, filter, options.pageSize);
+  }
+  return { leadId: lead.id, page };
 }
 
 // 编辑线索：admin 可编辑全部并修改负责人，sales 仅可编辑自己负责的线索（不可改负责人）

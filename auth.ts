@@ -17,7 +17,7 @@ async function getUser(email: string) {
   }
 }
 
-export const { auth, signIn, signOut, handlers } = NextAuth({
+export const { handlers, auth, signIn, signOut } = NextAuth({
   ...authConfig,
   trustHost: true, // 信任请求的 host，避免 UntrustedHost 错误（本地与反向代理场景）
   callbacks: {
@@ -60,9 +60,14 @@ export const { auth, signIn, signOut, handlers } = NextAuth({
 
         if (parsedCredentials.success) {
           const { email, password } = parsedCredentials.data;
-          const user = await getUser(email);
+          const normalizedEmail = email.toLowerCase().trim();
+          const user = await getUser(normalizedEmail);
           if (!user) return null;
-          const passwordsMatch = await bcrypt.compare(password, user.password);
+          const isDevPlainPassword =
+            process.env.NODE_ENV === "development" && !/^\$2[ab]\$/.test(user.password);
+          const passwordsMatch = isDevPlainPassword
+            ? password === user.password
+            : await bcrypt.compare(password, user.password);
           if (passwordsMatch) return user;
           return null;
         }

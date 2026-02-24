@@ -1,6 +1,6 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { createEmptyLeadAction, getPendingNotificationSummaryAction } from "@/app/lib/crm-actions";
@@ -11,6 +11,7 @@ import { PermissionDeniedDialog } from "../components/PermissionDeniedDialog";
 
 export function LeadsPageActions({ isAdmin }: { isAdmin: boolean }) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [creating, setCreating] = useState(false);
   const [pendingCount, setPendingCount] = useState(0);
   const [showNotificationDialog, setShowNotificationDialog] = useState(false);
@@ -37,7 +38,10 @@ export function LeadsPageActions({ isAdmin }: { isAdmin: boolean }) {
   const handleNewLead = async () => {
     setCreating(true);
     try {
-      const result = await createEmptyLeadAction();
+      const filterParam = searchParams.get("filter") ?? undefined;
+      const pageSizeStr = searchParams.get("pageSize") ?? "20";
+      const pageSize = Math.max(1, Math.min(100, parseInt(pageSizeStr, 10) || 20));
+      const result = await createEmptyLeadAction({ pageSize, filterParam });
       if (result?.error) {
         setPermissionDialog({
           open: true,
@@ -45,7 +49,13 @@ export function LeadsPageActions({ isAdmin }: { isAdmin: boolean }) {
           description: result.error,
         });
       } else {
-        router.refresh();
+        // 跳转到新线索所在页并高亮（根据重点关注数量计算页码）
+        const params = new URLSearchParams();
+        params.set("page", String(result.page ?? 1));
+        if (result.leadId) params.set("highlight", result.leadId);
+        if (filterParam) params.set("filter", filterParam);
+        params.set("pageSize", pageSizeStr);
+        router.push(`/dashboard/crm/leads?${params.toString()}`);
       }
     } finally {
       setCreating(false);

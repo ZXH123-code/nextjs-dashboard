@@ -356,15 +356,15 @@ export function FilterDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         ref={contentRef}
-        className="sm:max-w-3xl max-h-[85vh] overflow-y-auto select-none data-[state=closed]:duration-0 data-[state=closed]:animate-none"
-        overlayClassName="data-[state=closed]:duration-0 data-[state=closed]:animate-none"
+        className="sm:max-w-3xl max-h-[85vh] overflow-y-auto select-none data-[state=open]:!animate-none data-[state=open]:!duration-0 data-[state=closed]:!animate-none data-[state=closed]:!duration-0"
+        overlayClassName="data-[state=open]:!animate-none data-[state=open]:!duration-0 data-[state=closed]:!animate-none data-[state=closed]:!duration-0"
         style={
           position
             ? {
-                left: `${position.x}px`,
-                top: `${position.y}px`,
-                transform: "none",
-              }
+              left: `${position.x}px`,
+              top: `${position.y}px`,
+              transform: "none",
+            }
             : undefined
         }
       >

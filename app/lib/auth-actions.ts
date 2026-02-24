@@ -91,6 +91,7 @@ export async function register(prevState: string | undefined, formData: FormData
       password: z.string().min(6, "密码至少需要6个字符"),
       confirmPassword: z.string().min(6, "确认密码至少需要6个字符"),
       verificationCode: z.string().length(6, "验证码为6位数字").regex(/^\d{6}$/, "验证码为6位数字"),
+      inviteCode: z.string().min(1, "请输入邀请码"),
     })
     .refine((data) => data.password === data.confirmPassword, {
       message: "密码和确认密码不匹配",
@@ -103,6 +104,7 @@ export async function register(prevState: string | undefined, formData: FormData
     password: formData.get("password"),
     confirmPassword: formData.get("confirmPassword"),
     verificationCode: formData.get("verificationCode"),
+    inviteCode: formData.get("inviteCode"),
   });
 
   if (!validatedFields.success) {
@@ -113,11 +115,26 @@ export async function register(prevState: string | undefined, formData: FormData
     if (errors.verificationCode) {
       return errors.verificationCode[0];
     }
+    if (errors.inviteCode) {
+      return errors.inviteCode[0];
+    }
     return Object.values(errors).flat()[0] || "表单验证失败";
   }
 
-  const { name, email, password, verificationCode } = validatedFields.data;
+  const { name, email, password, verificationCode, inviteCode } = validatedFields.data;
   const normalizedEmail = email.toLowerCase();
+
+  // 1.5 校验邀请码并确定角色
+  const adminCode = process.env.INVITE_CODE_ADMIN ?? "";
+  const salesCode = process.env.INVITE_CODE_SALES ?? "";
+  let assignedRole: "admin" | "sales";
+  if (inviteCode === adminCode) {
+    assignedRole = "admin";
+  } else if (inviteCode === salesCode) {
+    assignedRole = "sales";
+  } else {
+    return "邀请码无效，请联系管理员获取邀请码";
+  }
 
   // 2. 检查邮箱是否已存在
   try {
@@ -159,6 +176,7 @@ export async function register(prevState: string | undefined, formData: FormData
         name,
         email: normalizedEmail,
         password: hashedPassword,
+        role: assignedRole,
       },
     });
     // 删除已用验证码（单次有效）

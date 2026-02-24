@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { lusitana } from "@/app/ui/fonts";
-import { AlertCircle, ArrowRight, User, Mail, Lock, ShieldCheck, KeyRound } from "lucide-react";
+import { AlertCircle, ArrowRight, User, Mail, Lock, ShieldCheck, KeyRound, Ticket } from "lucide-react";
 import { GlobeAltIcon } from "@heroicons/react/24/outline";
 import { register } from "@/app/lib/auth-actions";
 import { useActionState } from "react";
@@ -239,6 +239,16 @@ function RegisterContent() {
               placeholder="确认密码"
               required
               minLength={6}
+              className="landing-input-compact"
+            />
+          </div>
+          <div className="landing-input-wrapper-compact">
+            <Ticket className="landing-input-icon" />
+            <input
+              type="text"
+              name="inviteCode"
+              placeholder="邀请码（联系管理员获取）"
+              required
               className="landing-input-compact"
             />
           </div>

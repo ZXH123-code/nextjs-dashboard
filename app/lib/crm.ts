@@ -125,7 +125,11 @@ function conditionToPrisma(
         return { salesPerson: { name: { equals: valStr, mode: "insensitive" } } } as Prisma.crm_leadWhereInput;
       }
       if (isBool) return { [field]: eqVal } as Prisma.crm_leadWhereInput;
-      if (isDate) return { [field]: dateVal } as Prisma.crm_leadWhereInput;
+      if (isDate && dateVal) {
+        const nextDay = new Date(dateVal);
+        nextDay.setDate(nextDay.getDate() + 1);
+        return { [field]: { gte: dateVal, lt: nextDay } } as Prisma.crm_leadWhereInput;
+      }
       return { [field]: { equals: valStr, mode: "insensitive" } } as Prisma.crm_leadWhereInput;
 
     case "notEquals":
@@ -133,7 +137,11 @@ function conditionToPrisma(
         return { salesPerson: { name: { not: { equals: valStr, mode: "insensitive" } } } } as Prisma.crm_leadWhereInput;
       }
       if (isBool) return { [field]: { not: eqVal } } as Prisma.crm_leadWhereInput;
-      if (isDate) return { [field]: { not: dateVal } } as Prisma.crm_leadWhereInput;
+      if (isDate && dateVal) {
+        const nextDay = new Date(dateVal);
+        nextDay.setDate(nextDay.getDate() + 1);
+        return { NOT: { [field]: { gte: dateVal, lt: nextDay } } } as Prisma.crm_leadWhereInput;
+      }
       return { [field]: { not: { equals: valStr, mode: "insensitive" } } } as Prisma.crm_leadWhereInput;
 
     case "contains":
@@ -249,6 +257,23 @@ export async function getLeads(
   }
   const items = await prisma.crm_lead.findMany({ where, orderBy, include });
   return { items: items as LeadListItem[], total: items.length };
+}
+
+/** 计算新建线索会出现在第几页（新线索在重点关注之后、按 createdAt 最新，故位置 = 重点关注数量 + 1） */
+export async function getPageForNewLead(
+  auth: CrmAuth,
+  filter: LeadFilter | undefined,
+  pageSize: number
+): Promise<number> {
+  const baseWhere = buildLeadWhere(auth, false);
+  const filterWhere = buildLeadWhereFromFilter(filter);
+  const where: Prisma.crm_leadWhereInput = {
+    ...baseWhere,
+    ...filterWhere,
+    isKeyFocus: true,
+  };
+  const keyFocusCount = await prisma.crm_lead.count({ where });
+  return Math.max(1, Math.ceil((keyFocusCount + 1) / pageSize));
 }
 
 const MAX_LEAD_IDS_FOR_SELECT_ALL = 5000;

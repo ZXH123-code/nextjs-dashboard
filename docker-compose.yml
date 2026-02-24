@@ -1,0 +1,24 @@
+# 本地测试用 PostgreSQL，与生产表结构一致，用于跑 demo 数据
+# 使用：在项目根目录执行 docker compose up -d
+# 连接：localhost:5433（避免与其它 Postgres 容器占用的 5432 冲突）
+services:
+  postgres:
+    image: postgres:16
+    container_name: crm-dev-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: neondb
+    ports:
+      - "5433:5432"
+    volumes:
+      - crm_dev_pg_data:/var/lib/postgresql/data
+      - ./docker/init-db:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  crm_dev_pg_data:

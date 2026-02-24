@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { softDeleteLeadAction } from "@/app/lib/crm-actions";
 import { Button } from "@/components/ui/button";
 import { Trash2, AlertTriangle } from "lucide-react";
@@ -15,6 +16,7 @@ export function DeleteLeadButton({
   leadName: string;
   hasOpportunity?: boolean;
 }) {
+  const router = useRouter();
   const [open, setOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const { showAlert, AlertComponent } = useAlert();
@@ -34,8 +36,7 @@ export function DeleteLeadButton({
           title: "删除成功" 
         });
         setOpen(false);
-        // 刷新页面以更新列表
-        window.location.reload();
+        router.refresh();
       }
     } catch (error) {
       showAlert("删除失败，请稍后重试", { type: "error", title: "删除失败" });

@@ -40,3 +40,9 @@ next-env.d.ts
 
 # 文档
 /docs
+
+# docker
+/docker
+
+# 演示数据
+/demo_data

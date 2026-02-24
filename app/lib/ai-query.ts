@@ -5,19 +5,22 @@ import { createOpenAI } from "@ai-sdk/openai";
 import { PrismaClient } from "@prisma/client";
 import { z } from "zod";
 import { getCrmAuth } from "./crm";
+import { prisma } from "./prisma";
 
 const MAX_ROWS = 500;
 const MAX_QUERIES = 5;
 
-/** AI 问数仅使用只读 DB 连接（DATABASE_URL_READONLY），不使用主库。未配置时返回 null。 */
+/** AI 问数使用只读 DB 连接（若配置了 DATABASE_URL_READONLY），避免越权写操作。见 docs/AI_问数_只读数据库用户.md */
 let readOnlyPrisma: PrismaClient | null = null;
-function getReadOnlyPrisma(): PrismaClient | null {
+function getReadOnlyPrisma(): PrismaClient {
   const url = process.env.DATABASE_URL_READONLY;
-  if (!url) return null;
-  if (!readOnlyPrisma) {
-    readOnlyPrisma = new PrismaClient({ datasources: { db: { url } } });
+  if (url) {
+    if (!readOnlyPrisma) {
+      readOnlyPrisma = new PrismaClient({ datasources: { db: { url } } });
+    }
+    return readOnlyPrisma;
   }
-  return readOnlyPrisma;
+  return prisma;
 }
 
 /** 三种方式（优先级）：Gateway 需 Vercel 绑卡；DeepSeek/OpenAI 直连只需各自 API Key */
@@ -54,7 +57,7 @@ function buildSchemaPrompt(auth: { userId: string; role: string }): string {
 ## 可用的表（仅限以下 CRM 表，使用表名与列名的数据库实际名称）
 
 - users (id UUID, name VARCHAR, email VARCHAR, role VARCHAR) — 用户/销售人员
-- crm_leads (id, customer_name, nickname, city, address, industry, lead_source, contact_phone, created_at, customer_tier, sales_person_id, status, is_key_focus, key_focus_by_admin, deleted_at) — 线索；status: 未跟进|跟进中|有意向|无意向
+- crm_leads (id, customer_name, nickname, city, address, industry, lead_source, contact_phone, created_at, customer_tier, sales_person_id, status, is_key_focus, key_focus_by_admin, extra_fields JSONB, deleted_at) — 线索；status: 未跟进|跟进中|有意向|无意向；extra_fields 为「其他」扩展字段（JSON，可含 Excel 未映射列），查询时可用 extra_fields->>'key' 或 extra_fields ? 'key'
 - crm_opportunities (id, name, lead_id, product_type, status, amount, contact_phone, created_at, expected_close_date, sales_person_id, delivery_person_id, lost_reason, is_key_focus, key_focus_by_admin) — 商机；status: 初步沟通|方案确认|待签约|已赢单|已丢单
 - crm_customers (id, name, nickname, city, customer_tier, first_maintenance_date, status, industry, employee_count, tags, main_products, contact_phone, opportunity_id, actual_amount, sales_person_id, created_at, is_key_focus, key_focus_by_admin) — 客户；status: 预备签约|已签约|流失
 - crm_follow_ups (id, content, follow_up_by_id, follow_date, contact_person, summary, next_step, customer_needs, status, lead_id, customer_id, opportunity_id, created_at, updated_at) — 跟进记录
@@ -160,18 +163,11 @@ export async function askAiQuestionAction(question: string): Promise<AskAiQuesti
     return toSerializable({ success: false, error: "未配置 AI API Key（AI_GATEWAY_API_KEY / DEEPSEEK_API_KEY / OPENAI_API_KEY 任选其一）" });
   }
 
-  const db = getReadOnlyPrisma();
-  if (!db) {
-    return toSerializable({
-      success: false,
-      error: "未配置只读数据库连接（DATABASE_URL_READONLY），AI 问数不可用。请在 .env 中配置 DATABASE_URL_READONLY。",
-    });
-  }
-
   try {
     const { provider, modelId, useChat } = getOpenAI();
     const model = useChat ? provider.chat(modelId) : provider(modelId);
     const schemaPrompt = buildSchemaPrompt(auth);
+    const db = getReadOnlyPrisma();
 
     const isDeepSeek = !!process.env.DEEPSEEK_API_KEY;
     let queries: string[];
