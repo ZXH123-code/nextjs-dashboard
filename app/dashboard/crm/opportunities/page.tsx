@@ -1,7 +1,8 @@
-import { getOpportunities, getCrmAuth, getUsers } from "@/app/lib/crm";
+import { getOpportunities, getCrmAuth, getUsers, getPageForOpportunityId } from "@/app/lib/crm";
 import { OpportunitiesTable } from "./OpportunitiesTable";
 import { Pagination } from "@/components/ui/pagination";
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { lusitana } from "@/app/ui/fonts";
 import { ArrowLeft } from "lucide-react";
 import { auth } from "@/auth";
@@ -17,13 +18,32 @@ export default async function OpportunitiesPage({
   const page = Math.max(1, parseInt(params.page ?? "1", 10) || 1);
   const pageSize = Math.max(1, Math.min(100, parseInt(params.pageSize ?? "20", 10) || 20));
 
+  const crmAuth = await getCrmAuth();
+
+  // 搜索点击跳转：若高亮商机不在当前页，先重定向到所在页
+  if (params.highlight?.trim()) {
+    const targetPage = await getPageForOpportunityId(
+      crmAuth,
+      params.highlight,
+      pageSize,
+      params.leadId ?? undefined
+    );
+    if (targetPage !== page) {
+      const q = new URLSearchParams();
+      q.set("page", String(targetPage));
+      q.set("pageSize", String(pageSize));
+      if (params.leadId) q.set("leadId", params.leadId);
+      q.set("highlight", params.highlight);
+      redirect(`/dashboard/crm/opportunities?${q.toString()}`);
+    }
+  }
+
   let opportunities: Awaited<ReturnType<typeof getOpportunities>>["items"] = [];
   let total = 0;
   let users: Awaited<ReturnType<typeof getUsers>> = [];
   let currentUserRole = "sales";
   let currentUserId: string | undefined;
   try {
-    const crmAuth = await getCrmAuth();
     const [oppsRes, usersList] = await Promise.all([
       getOpportunities(crmAuth, {
         page,

@@ -46,3 +46,6 @@ next-env.d.ts
 
 # 演示数据
 /demo_data
+
+# 脚本
+/scripts

@@ -1,6 +1,7 @@
-import { getCustomers, getCrmAuth } from "@/app/lib/crm";
+import { getCustomers, getCrmAuth, getPageForCustomerId } from "@/app/lib/crm";
 import { CustomersTable } from "./CustomersTable";
 import { Pagination } from "@/components/ui/pagination";
+import { redirect } from "next/navigation";
 import { lusitana } from "@/app/ui/fonts";
 import { auth } from "@/auth";
 
@@ -15,12 +16,25 @@ export default async function CustomersPage({
   const page = Math.max(1, parseInt(params.page ?? "1", 10) || 1);
   const pageSize = Math.max(1, Math.min(100, parseInt(params.pageSize ?? "20", 10) || 20));
 
+  const crmAuth = await getCrmAuth();
+
+  // 搜索点击跳转：若高亮客户不在当前页，先重定向到所在页
+  if (params.highlight?.trim()) {
+    const targetPage = await getPageForCustomerId(crmAuth, params.highlight, pageSize);
+    if (targetPage !== page) {
+      const q = new URLSearchParams();
+      q.set("page", String(targetPage));
+      q.set("pageSize", String(pageSize));
+      q.set("highlight", params.highlight);
+      redirect(`/dashboard/crm/customers?${q.toString()}`);
+    }
+  }
+
   let customers: Awaited<ReturnType<typeof getCustomers>>["items"] = [];
   let total = 0;
   let currentUserRole = "sales";
   let currentUserId: string | undefined;
   try {
-    const crmAuth = await getCrmAuth();
     const customersRes = await getCustomers(crmAuth, { page, pageSize });
     customers = customersRes.items;
     total = customersRes.total;

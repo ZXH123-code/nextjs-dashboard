@@ -1,5 +1,6 @@
 import { Suspense } from "react";
-import { getLeads, getCrmAuth, getUsers } from "@/app/lib/crm";
+import { redirect } from "next/navigation";
+import { getLeads, getCrmAuth, getUsers, getPageForLeadId } from "@/app/lib/crm";
 import type { LeadFilter } from "@/app/lib/crm";
 import { LeadsTableWithBulk } from "./LeadsTableWithBulk";
 import { LeadsPageActions } from "./LeadsPageActions";
@@ -90,6 +91,23 @@ export default async function LeadsPage({
   const params = await searchParams;
   const auth = await getCrmAuth();
   const isAdmin = auth?.role === "admin";
+  const page = Math.max(1, parseInt(params.page ?? "1", 10) || 1);
+  const pageSize = Math.max(1, Math.min(100, parseInt(params.pageSize ?? "20", 10) || 20));
+  const filter = decodeFilter(params.filter);
+
+  // 搜索点击跳转：若高亮记录不在当前页，先重定向到所在页
+  if (params.highlight?.trim()) {
+    const targetPage = await getPageForLeadId(auth, params.highlight, filter, pageSize);
+    if (targetPage !== page) {
+      const q = new URLSearchParams();
+      q.set("page", String(targetPage));
+      q.set("pageSize", String(pageSize));
+      if (params.filter) q.set("filter", params.filter);
+      q.set("highlight", params.highlight);
+      redirect(`/dashboard/crm/leads?${q.toString()}`);
+    }
+  }
+
   const suspenseKey = `${params.page ?? "1"}-${params.pageSize ?? "20"}-${params.filter ?? ""}`;
 
   return (

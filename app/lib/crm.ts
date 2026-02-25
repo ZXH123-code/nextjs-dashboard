@@ -276,6 +276,30 @@ export async function getPageForNewLead(
   return Math.max(1, Math.ceil((keyFocusCount + 1) / pageSize));
 }
 
+/** 计算某条线索在当前筛选与排序下位于第几页（用于搜索点击跳转高亮） */
+export async function getPageForLeadId(
+  auth: CrmAuth,
+  leadId: string,
+  filter: LeadFilter | undefined,
+  pageSize: number
+): Promise<number> {
+  const baseWhere = buildLeadWhere(auth, false);
+  const filterWhere = buildLeadWhereFromFilter(filter);
+  const listWhere: Prisma.crm_leadWhereInput = { ...baseWhere, ...filterWhere };
+  const lead = await prisma.crm_lead.findFirst({
+    where: { id: leadId, ...listWhere },
+    select: { isKeyFocus: true, createdAt: true },
+  });
+  if (!lead) return 1;
+  const beforeWhere: Prisma.crm_leadWhereInput = lead.isKeyFocus
+    ? { isKeyFocus: true, createdAt: { gt: lead.createdAt } }
+    : { OR: [{ isKeyFocus: true }, { isKeyFocus: false, createdAt: { gt: lead.createdAt } }] };
+  const beforeCount = await prisma.crm_lead.count({
+    where: { ...listWhere, ...beforeWhere },
+  });
+  return Math.max(1, Math.ceil((beforeCount + 1) / pageSize));
+}
+
 const MAX_LEAD_IDS_FOR_SELECT_ALL = 5000;
 
 /** 按当前筛选条件返回线索 id 列表（用于「全选」），最多返回 MAX_LEAD_IDS_FOR_SELECT_ALL 条 */
@@ -634,6 +658,29 @@ export async function getOpportunities(
   return { items: mapAmount(rows) as OpportunityListItem[], total: rows.length };
 }
 
+/** 计算某条商机在当前列表（含 leadId 筛选）下位于第几页（用于搜索点击跳转高亮） */
+export async function getPageForOpportunityId(
+  auth: CrmAuth,
+  opportunityId: string,
+  pageSize: number,
+  leadId?: string
+): Promise<number> {
+  let where: Prisma.crm_opportunityWhereInput = !auth ? emptyWhere : auth.role === "admin" ? {} : salesFilter(auth.userId);
+  if (leadId) where = { ...where, leadId };
+  const opp = await prisma.crm_opportunity.findFirst({
+    where: { id: opportunityId, ...where },
+    select: { isKeyFocus: true, createdAt: true },
+  });
+  if (!opp) return 1;
+  const beforeWhere: Prisma.crm_opportunityWhereInput = opp.isKeyFocus
+    ? { isKeyFocus: true, createdAt: { gt: opp.createdAt } }
+    : { OR: [{ isKeyFocus: true }, { isKeyFocus: false, createdAt: { gt: opp.createdAt } }] };
+  const beforeCount = await prisma.crm_opportunity.count({
+    where: { ...where, ...beforeWhere },
+  });
+  return Math.max(1, Math.ceil((beforeCount + 1) / pageSize));
+}
+
 export async function createOpportunity(data: {
   name: string;
   leadId?: string;
@@ -765,6 +812,27 @@ export async function getCustomers(
   }
   const rows = await prisma.crm_customer.findMany({ where, orderBy, include });
   return { items: mapAmount(rows) as CustomerListItem[], total: rows.length };
+}
+
+/** 计算某条客户在当前列表下位于第几页（用于搜索点击跳转高亮） */
+export async function getPageForCustomerId(
+  auth: CrmAuth,
+  customerId: string,
+  pageSize: number
+): Promise<number> {
+  const where: Prisma.crm_customerWhereInput = !auth ? emptyWhere : auth.role === "admin" ? {} : salesFilter(auth.userId);
+  const customer = await prisma.crm_customer.findFirst({
+    where: { id: customerId, ...where },
+    select: { isKeyFocus: true, createdAt: true },
+  });
+  if (!customer) return 1;
+  const beforeWhere: Prisma.crm_customerWhereInput = customer.isKeyFocus
+    ? { isKeyFocus: true, createdAt: { gt: customer.createdAt } }
+    : { OR: [{ isKeyFocus: true }, { isKeyFocus: false, createdAt: { gt: customer.createdAt } }] };
+  const beforeCount = await prisma.crm_customer.count({
+    where: { ...where, ...beforeWhere },
+  });
+  return Math.max(1, Math.ceil((beforeCount + 1) / pageSize));
 }
 
 export async function updateCustomer(
