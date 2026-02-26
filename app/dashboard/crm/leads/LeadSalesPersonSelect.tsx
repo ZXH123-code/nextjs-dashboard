@@ -46,10 +46,21 @@ export function LeadSalesPersonSelect({
   const currentAssignees = users.filter((u) => currentAssigneeIds.includes(u.id));
   const selectedAssignees = users.filter((u) => selectedAssigneeIds.includes(u.id));
 
+  const currentNames = currentAssignees.map((u) => u.name);
+  const buttonLabel =
+    currentNames.length === 0
+      ? "未指定"
+      : currentNames.length === 1
+        ? currentNames[0]
+        : `${currentNames[0]}...`;
+
   if (!canAssign) {
     return (
-      <span className="text-muted-foreground text-xs">
-        {currentAssignees.length > 0 ? currentAssignees.map((u) => u.name).join(", ") : "未指定"}
+      <span
+        className="text-muted-foreground text-xs max-w-[140px] inline-block truncate"
+        title={currentNames.join(", ")}
+      >
+        {buttonLabel}
       </span>
     );
   }
@@ -106,10 +117,12 @@ export function LeadSalesPersonSelect({
       <Button
         type="button"
         variant="outline"
-        className="h-8 min-w-[120px] justify-start text-xs font-normal"
+        className="h-8 min-w-[120px] max-w-[160px] justify-start text-xs font-normal"
         onClick={openDialog}
       >
-        {currentAssignees.length > 0 ? currentAssignees.map((u) => u.name).join(", ") : "未指定"}
+        <span className="truncate" title={currentNames.join(", ")}>
+          {buttonLabel}
+        </span>
       </Button>
 
       <Dialog open={isDialogOpen} onOpenChange={(open) => !open && handleClose()}>
