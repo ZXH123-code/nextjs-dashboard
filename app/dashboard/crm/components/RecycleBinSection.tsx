@@ -14,7 +14,7 @@ type DeletedLead = {
   city: string | null;
   status: string;
   deletedAt: Date | null;
-  salesPerson: { id: string; name: string } | null;
+  assignees: { userId: string; user: { id: string; name: string } }[];
   opportunity: { id: string; name: string; status: string } | null;
 };
 
@@ -167,7 +167,7 @@ export function RecycleBinSection({ deletedLeads }: { deletedLeads: DeletedLead[
                   <th className="px-6 py-3 text-left font-medium">客户名称</th>
                   <th className="px-6 py-3 text-left font-medium">城市</th>
                   <th className="px-6 py-3 text-left font-medium">状态</th>
-                  <th className="px-6 py-3 text-left font-medium">销售人员</th>
+                  <th className="px-6 py-3 text-left font-medium">负责人</th>
                   <th className="px-6 py-3 text-left font-medium">删除时间</th>
                   <th className="px-6 py-3 text-left font-medium">关联状态</th>
                   <th className="px-6 py-3 text-right font-medium">操作</th>
@@ -184,7 +184,9 @@ export function RecycleBinSection({ deletedLeads }: { deletedLeads: DeletedLead[
                       </span>
                     </td>
                     <td className="px-6 py-3 text-muted-foreground">
-                      {lead.salesPerson?.name || "未分配"}
+                      {lead.assignees?.length
+                        ? lead.assignees.map((a) => a.user?.name ?? "").filter(Boolean).join(", ")
+                        : "未分配"}
                     </td>
                     <td className="px-6 py-3 text-muted-foreground text-xs">
                       {lead.deletedAt ? (

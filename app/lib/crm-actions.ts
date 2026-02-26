@@ -3,15 +3,17 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { auth } from "@/auth";
+import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
 
 async function checkCrmPermission(
   userId: string,
   role: string,
-  record: { salesPersonId: string | null } | null
+  record: { salesPersonId?: string | null; assigneeIds?: string[] } | null
 ): Promise<boolean> {
   if (!record) return false;
   if (role === "admin") return true;
+  if (record.assigneeIds) return record.assigneeIds.includes(userId);
   return record.salesPersonId === userId;
 }
 import {
@@ -21,8 +23,8 @@ import {
   updateCustomer,
   updateLead,
   updateLeadStatus,
-  updateLeadSalesPerson,
-  updateLeadSalesPersonBatch,
+  setLeadAssignees,
+  addLeadAssigneeBatch,
   updateCustomerSalesPersonBatch,
   deleteCustomers,
   deleteLead,
@@ -55,10 +57,10 @@ export async function createLeadAction(formData: FormData) {
 
   const customerName = formData.get("customerName") as string;
   if (!customerName?.trim()) return { error: "客户名称必填" };
-  const salesPersonId =
-    role === "admin"
-      ? (formData.get("salesPersonId") as string) || undefined
-      : userId;
+  // 兼容旧表单字段：仍可从 salesPersonId 读入，写入新模型的 assigneeIds
+  const legacySalesPersonId =
+    role === "admin" ? ((formData.get("salesPersonId") as string) || "") : userId;
+  const assigneeIds = legacySalesPersonId ? [legacySalesPersonId] : role === "sales" ? [userId] : [];
 
   await createLead({
     customerName: customerName.trim(),
@@ -73,7 +75,7 @@ export async function createLeadAction(formData: FormData) {
     contactPhone: (formData.get("contactPhone") as string) || undefined,
     remark: (formData.get("remark") as string) || undefined,
     status: (formData.get("status") as string) || "未跟进",
-    salesPersonId,
+    assigneeIds,
   });
   revalidatePath("/dashboard/crm/leads");
   revalidatePath("/dashboard");
@@ -104,7 +106,7 @@ export async function createEmptyLeadAction(options?: {
   const lead = await createLead({
     customerName: "（待补全）",
     status: "未跟进",
-    salesPersonId: role === "sales" ? userId : undefined,
+    assigneeIds: role === "sales" ? [userId] : [],
   });
   revalidatePath("/dashboard/crm/leads");
   revalidatePath("/dashboard");
@@ -133,19 +135,15 @@ export async function updateLeadAction(
 
   const lead = await prisma.crm_lead.findUnique({
     where: { id: leadId },
-    select: { salesPersonId: true },
+    select: { assignees: { select: { userId: true } } },
   });
-  if (!(await checkCrmPermission(userId, role, lead))) {
+  const assigneeIds = lead?.assignees?.map((a) => a.userId) ?? [];
+  if (!(await checkCrmPermission(userId, role, { assigneeIds }))) {
     return { error: "无权限" };
   }
 
   const customerNameRaw = (formData.get("customerName") as string) ?? "";
   const customerName = customerNameRaw.trim() ? customerNameRaw.trim() : "（待补全）";
-
-  const salesPersonId =
-    role === "admin"
-      ? (formData.get("salesPersonId") as string) || null
-      : lead?.salesPersonId ?? null;
 
   await updateLead(leadId, {
     customerName,
@@ -159,7 +157,6 @@ export async function updateLeadAction(
     customerTier: (formData.get("customerTier") as string) || undefined,
     contactPhone: (formData.get("contactPhone") as string) || undefined,
     remark: (formData.get("remark") as string) || undefined,
-    salesPersonId,
     status: (formData.get("status") as string) || undefined,
   });
   revalidatePath("/dashboard/crm/leads");
@@ -239,13 +236,14 @@ export async function toggleLeadKeyFocusAction(leadId: string): Promise<{ error?
 
   const leadRow = await prisma.crm_lead.findUnique({
     where: { id: leadId, deletedAt: null },
+    select: { isKeyFocus: true, assignees: { select: { userId: true } } },
   });
   if (!leadRow) return { error: "线索不存在或已删除" };
-  const lead = leadRow as typeof leadRow & { isKeyFocus?: boolean; salesPersonId?: string | null };
-  const canEdit = role === "admin" || lead.salesPersonId === userId;
+  const assigneeIds = leadRow.assignees.map((a) => a.userId);
+  const canEdit = role === "admin" || assigneeIds.includes(userId);
   if (!canEdit) return { error: "无权限操作该线索" };
 
-  const next = !lead.isKeyFocus;
+  const next = !leadRow.isKeyFocus;
   await setLeadKeyFocus(leadId, next, role === "admin");
   revalidatePath("/dashboard/crm/leads");
   revalidatePath("/dashboard/crm/opportunities");
@@ -265,14 +263,14 @@ export async function batchSetLeadKeyFocusAction(
   if (!userId) return { error: "未登录" };
   if (!leadIds?.length) return { error: "请选择至少一条线索" };
 
-  const where: { id: { in: string[] }; deletedAt: null; salesPersonId?: string; keyFocusByAdmin?: boolean } = {
+  const where: Prisma.crm_leadWhereInput = {
     id: { in: leadIds },
     deletedAt: null,
+    ...(role === "sales" && {
+      assignees: { some: { userId } },
+      keyFocusByAdmin: false, // sales 只能批量操作非管理员标的线索
+    }),
   };
-  if (role === "sales") {
-    where.salesPersonId = userId;
-    where.keyFocusByAdmin = false; // sales 只能批量操作非管理员标的线索
-  }
 
   const allowed = await prisma.crm_lead.findMany({
     where,
@@ -361,13 +359,13 @@ export async function updateLeadSalesPersonFormAction(formData: FormData) {
   const userId = (session?.user as { id?: string })?.id;
   const role = (session?.user as { role?: string })?.role ?? "sales";
   if (!userId) return;
+  if (role !== "admin") return;
   const lead = await prisma.crm_lead.findUnique({
     where: { id: leadId, deletedAt: null }, // 已删除的线索不能更新销售人员
-    select: { salesPersonId: true }
+    select: { id: true }
   });
   if (!lead) return; // 线索不存在或已删除
-  if (!(await checkCrmPermission(userId, role, lead))) return;
-  await updateLeadSalesPerson(leadId, salesPersonId || null);
+  await setLeadAssignees(leadId, salesPersonId ? [salesPersonId] : []);
   revalidatePath("/dashboard/crm/leads");
   revalidatePath("/dashboard");
 }
@@ -383,7 +381,13 @@ export async function batchUpdateLeadSalesPersonAction(
   if (role !== "admin") return { error: "无权限" };
   if (!leadIds?.length || !salesPersonId) return { error: "参数无效" };
 
-  await updateLeadSalesPersonBatch(leadIds, salesPersonId);
+  // 多负责人模式下：批量「追加」负责人（不影响已有负责人）
+  const validLeads = await prisma.crm_lead.findMany({
+    where: { id: { in: leadIds }, deletedAt: null },
+    select: { id: true },
+  });
+  const validIds = validLeads.map((l) => l.id);
+  await addLeadAssigneeBatch(validIds, salesPersonId);
 
   if (sendEmail) {
     const salesPerson = await prisma.users.findUnique({
@@ -393,7 +397,7 @@ export async function batchUpdateLeadSalesPersonAction(
     if (salesPerson?.email) {
       const leads = await prisma.crm_lead.findMany({
         where: {
-          id: { in: leadIds },
+          id: { in: validIds },
           deletedAt: null, // 只处理未删除的线索
         },
         select: { id: true, customerName: true },
@@ -716,9 +720,10 @@ export async function syncContactPhoneToLeadAction(
 
   const lead = await prisma.crm_lead.findUnique({
     where: { id: leadId },
-    select: { salesPersonId: true },
+    select: { assignees: { select: { userId: true } } },
   });
-  if (!(await checkCrmPermission(userId, role, lead))) {
+  const assigneeIds = lead?.assignees?.map((a) => a.userId) ?? [];
+  if (!(await checkCrmPermission(userId, role, { assigneeIds }))) {
     return { error: "无权限" };
   }
 
@@ -735,6 +740,7 @@ export async function createFollowUpAction(prevState: { error?: string } | null,
   const content = formData.get("content") as string;
   const followDate = formData.get("followDate") as string;
   const session = await auth();
+  const role = (session?.user as { role?: string })?.role ?? "sales";
   let followUpById = (session?.user as { id?: string })?.id;
 
   // 若 session 无用户 id，使用数据库中第一个用户作为跟进人（开发/单用户场景）
@@ -752,6 +758,33 @@ export async function createFollowUpAction(prevState: { error?: string } | null,
   const opportunityId = (formData.get("opportunityId") as string)?.trim() || undefined;
   if (!leadId && !customerId && !opportunityId) {
     return { error: "请至少选择关联的线索、商机或客户之一" };
+  }
+
+  // 服务端权限校验：sales 仅能对「自己可见」的记录写跟进
+  if (role !== "admin") {
+    const userId = followUpById;
+    if (!userId) return { error: "未登录" };
+    if (leadId) {
+      const lead = await prisma.crm_lead.findUnique({
+        where: { id: leadId, deletedAt: null },
+        select: { assignees: { where: { userId }, select: { userId: true } } },
+      });
+      if (!lead?.assignees?.length) return { error: "无权限关联该线索" };
+    }
+    if (customerId) {
+      const customer = await prisma.crm_customer.findUnique({
+        where: { id: customerId },
+        select: { salesPersonId: true },
+      });
+      if (!customer || customer.salesPersonId !== userId) return { error: "无权限关联该客户" };
+    }
+    if (opportunityId) {
+      const opp = await prisma.crm_opportunity.findUnique({
+        where: { id: opportunityId },
+        select: { salesPersonId: true },
+      });
+      if (!opp || opp.salesPersonId !== userId) return { error: "无权限关联该商机" };
+    }
   }
 
   const created = await createFollowUp({
@@ -790,11 +823,12 @@ export async function updateLeadStatusWithFollowUpAction(
     where: { id: leadId, deletedAt: null }, // 已删除的线索不能更新状态
     include: {
       opportunity: true,
-      salesPerson: { select: { id: true } },
+      assignees: { orderBy: { createdAt: "asc" }, select: { userId: true } },
     },
   });
   if (!lead) return { error: "线索不存在或已被删除" };
-  if (!(await checkCrmPermission(userId, role, { salesPersonId: lead.salesPersonId }))) {
+  const assigneeIds = lead.assignees.map((a) => a.userId);
+  if (!(await checkCrmPermission(userId, role, { assigneeIds }))) {
     return { error: "无权限" };
   }
 
@@ -804,11 +838,12 @@ export async function updateLeadStatusWithFollowUpAction(
   // 如果状态变更为「有意向」且还未创建商机，自动创建商机（默认名称：客户名称-商机）
   if (newStatus === "有意向" && !lead.opportunity) {
     const defaultName = lead.customerName?.trim() ? `${lead.customerName.trim()}-商机` : "（待补全）-商机";
+    const primaryAssigneeId = lead.assignees?.[0]?.userId ?? userId;
     await createOpportunity({
       name: defaultName,
       leadId: leadId,
       status: "初步沟通",
-      salesPersonId: lead.salesPersonId ?? userId,
+      salesPersonId: primaryAssigneeId,
     });
   }
 
@@ -829,45 +864,63 @@ export async function updateLeadStatusWithFollowUpAction(
   return { success: true };
 }
 
-/** 线索分配销售人员时创建跟进记录 */
-export async function updateLeadSalesPersonWithFollowUpAction(
+/** 设置线索负责人列表并创建跟进记录（仅 admin） */
+export async function setLeadAssigneesWithFollowUpAction(
   leadId: string,
-  salesPersonId: string | null,
+  assigneeIds: string[],
   followUpContent: string
 ) {
   const session = await auth();
   const userId = (session?.user as { id?: string })?.id;
   const role = (session?.user as { role?: string })?.role ?? "sales";
   if (!userId) return { error: "未登录" };
+  if (role !== "admin") return { error: "无权限" };
 
   const lead = await prisma.crm_lead.findUnique({
-    where: { id: leadId, deletedAt: null }, // 已删除的线索不能更新销售人员
-    select: { salesPersonId: true },
+    where: { id: leadId, deletedAt: null },
+    include: { assignees: { select: { userId: true } } },
   });
-  if (!lead || !(await checkCrmPermission(userId, role, lead))) {
-    return { error: "无权限或线索不存在" };
+  if (!lead) return { error: "线索不存在或已被删除" };
+
+  const oldIds = new Set(lead.assignees.map((a) => a.userId));
+  const newIds = Array.from(new Set((assigneeIds ?? []).filter(Boolean)));
+
+  try {
+    await setLeadAssignees(leadId, newIds);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("[setLeadAssignees] 写入失败:", msg);
+    return { error: `负责人更新失败：${msg}` };
   }
 
-  const oldSalesPersonId = lead.salesPersonId;
+  // 记录变更通知：新增/移除负责人
+  const newSet = new Set(newIds);
+  const added = newIds.filter((id) => !oldIds.has(id));
+  const removed = Array.from(oldIds).filter((id) => !newSet.has(id));
+  await Promise.all([
+    ...added.map((id) =>
+      recordLeadAssignmentChange({
+        leadId,
+        oldSalesPersonId: null,
+        newSalesPersonId: id,
+        createdBy: userId,
+      })
+    ),
+    ...removed.map((id) =>
+      recordLeadAssignmentChange({
+        leadId,
+        oldSalesPersonId: id,
+        newSalesPersonId: null,
+        createdBy: userId,
+      })
+    ),
+  ]);
 
-  // 更新销售人员
-  await updateLeadSalesPerson(leadId, salesPersonId);
-
-  // 记录变更通知（如果销售人员发生了变化）
-  if (oldSalesPersonId !== salesPersonId) {
-    await recordLeadAssignmentChange({
-      leadId,
-      oldSalesPersonId,
-      newSalesPersonId: salesPersonId,
-      createdBy: userId,
-    });
-  }
-
-  // 创建跟进记录（由被分配的销售人员作为跟进人）
-  if (salesPersonId && followUpContent.trim()) {
+  // 创建跟进记录（由操作人作为跟进人）
+  if (followUpContent.trim()) {
     await createFollowUp({
       content: followUpContent.trim(),
-      followUpById: salesPersonId, // 被分配的销售人员
+      followUpById: userId,
       followDate: new Date(),
       leadId,
       isSystemGenerated: true,
@@ -877,6 +930,19 @@ export async function updateLeadSalesPersonWithFollowUpAction(
   revalidatePath("/dashboard/crm/leads");
   revalidatePath("/dashboard");
   return { success: true };
+}
+
+/** 兼容旧接口：单负责人选择（会覆盖为 0 或 1 个负责人） */
+export async function updateLeadSalesPersonWithFollowUpAction(
+  leadId: string,
+  salesPersonId: string | null,
+  followUpContent: string
+) {
+  return setLeadAssigneesWithFollowUpAction(
+    leadId,
+    salesPersonId ? [salesPersonId] : [],
+    followUpContent
+  );
 }
 
 function decodeLeadFilter(filterParam: string | undefined): LeadFilter | undefined {
@@ -902,7 +968,7 @@ export async function getLeadIdsAction(
   return { ids, total };
 }
 
-/** 批量分配销售人员时创建跟进记录（更新版本）。仅对「负责人发生变化」的线索执行更新与跟进，已是该负责人的线索跳过。 */
+/** 批量「追加」负责人并创建跟进记录（仅 admin）。已包含该负责人的线索会跳过。 */
 export async function batchUpdateLeadSalesPersonWithFollowUpAction(
   leadIds: string[],
   salesPersonId: string,
@@ -923,49 +989,56 @@ export async function batchUpdateLeadSalesPersonWithFollowUpAction(
   if (role !== "admin") return { error: "无权限" };
   if (!leadIds?.length || !salesPersonId) return { error: "参数无效" };
 
-  // 先查询原有的销售人员信息（只查询未删除的线索）
-  const oldLeads = await prisma.crm_lead.findMany({
-    where: {
-      id: { in: leadIds },
-      deletedAt: null,
-    },
-    select: { id: true, customerName: true, salesPersonId: true },
+  // 只处理未删除的线索
+  const leads = await prisma.crm_lead.findMany({
+    where: { id: { in: leadIds }, deletedAt: null },
+    select: { id: true, customerName: true },
   });
+  if (leads.length === 0) {
+    revalidatePath("/dashboard/crm/leads");
+    revalidatePath("/dashboard");
+    return { updatedCount: 0, skippedCount: leadIds.length, salesPersonMap: {} };
+  }
 
-  // 仅处理负责人发生变化的线索，已是该负责人的不更新、不写跟进、不记变更
-  const leadsToUpdate = oldLeads.filter((l) => l.salesPersonId !== salesPersonId);
-  const skippedCount = oldLeads.length - leadsToUpdate.length;
+  // 查出哪些线索已包含该负责人
+  const already = await prisma.crm_lead_assignee.findMany({
+    where: { leadId: { in: leads.map((l) => l.id) }, userId: salesPersonId },
+    select: { leadId: true },
+  });
+  const alreadySet = new Set(already.map((r) => r.leadId));
+  const leadsToUpdate = leads.filter((l) => !alreadySet.has(l.id));
+  const skippedCount = leads.length - leadsToUpdate.length;
 
   if (leadsToUpdate.length === 0) {
     revalidatePath("/dashboard/crm/leads");
     revalidatePath("/dashboard");
-    return {
-      updatedCount: 0,
-      skippedCount,
-      salesPersonMap: {},
-    };
+    return { updatedCount: 0, skippedCount, salesPersonMap: {} };
   }
 
   const idsToUpdate = leadsToUpdate.map((l) => l.id);
 
-  // 批量更新销售人员（仅需变更的）
-  await updateLeadSalesPersonBatch(idsToUpdate, salesPersonId);
+  // 批量追加负责人
+  await addLeadAssigneeBatch(idsToUpdate, salesPersonId);
 
-  // 仅对发生变更的线索记录通知
-  const leadChanges = leadsToUpdate.map((lead) => ({
-    leadId: lead.id,
-    oldSalesPersonId: lead.salesPersonId,
-    newSalesPersonId: salesPersonId,
-  }));
-  await recordLeadAssignmentChanges(leadChanges, userId);
+  // 记录变更通知：为每条线索新增一条“assigned”
+  await Promise.all(
+    idsToUpdate.map((leadId) =>
+      recordLeadAssignmentChange({
+        leadId,
+        oldSalesPersonId: null,
+        newSalesPersonId: salesPersonId,
+        createdBy: userId,
+      })
+    )
+  );
 
-  // 仅对发生变更的线索创建跟进记录
+  // 创建跟进记录（由操作人作为跟进人）
   if (followUpContent.trim()) {
     await Promise.all(
       idsToUpdate.map((leadId) =>
         createFollowUp({
           content: followUpContent.trim(),
-          followUpById: salesPersonId,
+          followUpById: userId,
           followDate: new Date(),
           leadId,
           isSystemGenerated: true,
@@ -974,17 +1047,9 @@ export async function batchUpdateLeadSalesPersonWithFollowUpAction(
     );
   }
 
-  // 收集受影响的销售人员（新指定的 + 被替换的旧销售）
-  const affectedSalesPersonIds = new Set<string>();
-  affectedSalesPersonIds.add(salesPersonId);
-  leadsToUpdate.forEach((lead) => {
-    if (lead.salesPersonId && lead.salesPersonId !== salesPersonId) {
-      affectedSalesPersonIds.add(lead.salesPersonId);
-    }
-  });
-
-  const salesPersons = await prisma.users.findMany({
-    where: { id: { in: Array.from(affectedSalesPersonIds) } },
+  // 收集邮件通知数据（仅本次新增的负责人）
+  const person = await prisma.users.findUnique({
+    where: { id: salesPersonId },
     select: { id: true, name: true, email: true },
   });
 
@@ -992,30 +1057,14 @@ export async function batchUpdateLeadSalesPersonWithFollowUpAction(
     string,
     { name: string; email: string; leadIds: string[]; leadNames: string[] }
   > = {};
-
-  // 新指定的销售：只包含本次新分配给他的线索（不含本就归他的）
-  const newSalesPerson = salesPersons.find((sp) => sp.id === salesPersonId);
-  if (newSalesPerson && newSalesPerson.email) {
+  if (person?.email) {
     salesPersonMap[salesPersonId] = {
-      name: newSalesPerson.name,
-      email: newSalesPerson.email,
+      name: person.name,
+      email: person.email,
       leadIds: leadsToUpdate.map((l) => l.id),
       leadNames: leadsToUpdate.map((l) => l.customerName),
     };
   }
-
-  const oldSalesPersons = salesPersons.filter((sp) => sp.id !== salesPersonId);
-  oldSalesPersons.forEach((sp) => {
-    const lostLeads = leadsToUpdate.filter((lead) => lead.salesPersonId === sp.id);
-    if (lostLeads.length > 0 && sp.email) {
-      salesPersonMap[sp.id] = {
-        name: sp.name,
-        email: sp.email,
-        leadIds: lostLeads.map((l) => l.id),
-        leadNames: lostLeads.map((l) => l.customerName),
-      };
-    }
-  });
 
   revalidatePath("/dashboard/crm/leads");
   revalidatePath("/dashboard");
@@ -1210,9 +1259,34 @@ export async function createManualFollowUpAction(data: {
 }) {
   const session = await auth();
   const userId = (session?.user as { id?: string })?.id;
+  const role = (session?.user as { role?: string })?.role ?? "sales";
   if (!userId) return { error: "未登录" };
   if (!data.leadId && !data.customerId && !data.opportunityId) {
     return { error: "请至少选择关联的线索、商机或客户之一" };
+  }
+
+  if (role !== "admin") {
+    if (data.leadId) {
+      const lead = await prisma.crm_lead.findUnique({
+        where: { id: data.leadId, deletedAt: null },
+        select: { assignees: { where: { userId }, select: { userId: true } } },
+      });
+      if (!lead?.assignees?.length) return { error: "无权限关联该线索" };
+    }
+    if (data.customerId) {
+      const customer = await prisma.crm_customer.findUnique({
+        where: { id: data.customerId },
+        select: { salesPersonId: true },
+      });
+      if (!customer || customer.salesPersonId !== userId) return { error: "无权限关联该客户" };
+    }
+    if (data.opportunityId) {
+      const opp = await prisma.crm_opportunity.findUnique({
+        where: { id: data.opportunityId },
+        select: { salesPersonId: true },
+      });
+      if (!opp || opp.salesPersonId !== userId) return { error: "无权限关联该商机" };
+    }
   }
 
   const created = await createFollowUp({

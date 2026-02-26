@@ -10,10 +10,13 @@
     "db:push:local": "dotenv -e .env.local -- prisma db push",
     "db:migrate": "prisma migrate dev",
     "db:migrate:local": "dotenv -e .env.local -- prisma migrate dev",
+    "db:migrate:deploy:local": "dotenv -e .env.local -- prisma migrate deploy",
     "db:migrate:resolve-rolled-back:local": "dotenv -e .env.local -- prisma migrate resolve --rolled-back",
     "db:migrate:reset:local": "dotenv -e .env.local -- prisma migrate reset",
     "db:studio": "prisma studio",
-    "db:studio:local": "dotenv -e .env.local -- prisma studio"
+    "db:studio:local": "dotenv -e .env.local -- prisma studio",
+    "db:backup": "node tooling/backup-db.mjs",
+    "db:backup:prod": "node tooling/backup-db.mjs"
   },
   "dependencies": {
     "@ai-sdk/openai": "^3.0.26",

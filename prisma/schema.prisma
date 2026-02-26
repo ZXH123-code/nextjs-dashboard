@@ -16,7 +16,7 @@ model users {
   password String
   role     String? @default("sales") @db.VarChar(20) // admin=销售总管看全部, sales=销售人员只看自己的
 
-  crm_leads                       crm_lead[]
+  crm_lead_assignees              crm_lead_assignee[]
   crm_opportunities               crm_opportunity[]                  @relation("opportunity_sales")
   crm_opportunities_delivery      crm_opportunity[]                  @relation("opportunity_delivery")
   crm_customers                   crm_customer[]
@@ -46,42 +46,55 @@ model email_verification_code {
 
 /// 线索管理：总池子来源，状态更新后可转入商机
 model crm_lead {
-  id             String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
-  customerName   String   @map("customer_name") @db.VarChar(255)
-  nickname       String?  @db.VarChar(100)
+  id              String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  customerName    String   @map("customer_name") @db.VarChar(255)
+  nickname        String?  @db.VarChar(100)
   /// 主要联系人姓名（如“张三”、“李总”），用于和客户名称区分
-  contactPerson  String?  @map("contact_person") @db.VarChar(100)
+  contactPerson   String?  @map("contact_person") @db.VarChar(100)
   /// 主要联系人邮箱
-  contactEmail   String?  @map("contact_email") @db.VarChar(255)
-  city           String?  @db.VarChar(100)
-  address        String?  @db.VarChar(500)
-  industry       String?  @db.VarChar(100)
-  leadSource     String?  @map("lead_source") @db.VarChar(100)
+  contactEmail    String?  @map("contact_email") @db.VarChar(255)
+  city            String?  @db.VarChar(100)
+  address         String?  @db.VarChar(500)
+  industry        String?  @db.VarChar(100)
+  leadSource      String?  @map("lead_source") @db.VarChar(100)
   /// 主要联系方式（手机号）
-  contactPhone   String?  @map("contact_phone") @db.VarChar(20)
-  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamp(6)
-  customerTier   String?  @map("customer_tier") @db.VarChar(50)
+  contactPhone    String?  @map("contact_phone") @db.VarChar(20)
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+  customerTier    String?  @map("customer_tier") @db.VarChar(50)
   /// 线索备注 / 需求简要描述
-  remark         String?  @db.VarChar(500)
-  salesPersonId  String?  @map("sales_person_id") @db.Uuid
-  status         String   @default("未跟进") @db.VarChar(50) // 未跟进|跟进中|有意向|无意向
-  isKeyFocus     Boolean  @default(false) @map("is_key_focus") // 是否重点关注
+  remark          String?  @db.VarChar(500)
+  status          String   @default("未跟进") @db.VarChar(50) // 未跟进|跟进中|有意向|无意向
+  isKeyFocus      Boolean  @default(false) @map("is_key_focus") // 是否重点关注
   keyFocusByAdmin Boolean  @default(false) @map("key_focus_by_admin") // true=管理员标的，蓝色展示且 sales 不可取消
   /// 导入来源（可存文件名/渠道名，如“百度推广-2025Q1”）
-  importSource   String?  @map("import_source") @db.VarChar(100)
+  importSource    String?  @map("import_source") @db.VarChar(100)
   /// 其他扩展字段，存放 Excel 中未映射到规范字段的所有列
-  extraFields    Json?    @map("extra_fields")
+  extraFields     Json?    @map("extra_fields")
 
   deletedAt DateTime? @map("deleted_at") @db.Timestamp(6) // 软删除时间，null 表示未删除
 
-  salesPerson             users?                             @relation(fields: [salesPersonId], references: [id])
+  assignees               crm_lead_assignee[]
   opportunity             crm_opportunity?
   followUps               crm_follow_up[] // 该线索下的所有跟进记录
   assignmentNotifications crm_lead_assignment_notification[] // 该线索的销售人员变更通知
 
   @@index([status])
-  @@index([salesPersonId])
   @@map("crm_leads")
+}
+
+/// 线索负责人（多对多）：一条线索可指派多个负责人
+model crm_lead_assignee {
+  leadId    String   @map("lead_id") @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+
+  lead crm_lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  user users    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([leadId, userId])
+  @@index([userId])
+  @@index([leadId])
+  @@map("crm_lead_assignees")
 }
 
 /// 商机管理：来源于线索（有意向时转入），状态更新后可转入客户
@@ -119,7 +132,7 @@ model crm_customer {
   name                 String    @db.VarChar(255)
   nickname             String?   @db.VarChar(100)
   city                 String?   @db.VarChar(100)
-  firstMaintenanceDate DateTime?  @map("first_maintenance_date") @db.Date
+  firstMaintenanceDate DateTime? @map("first_maintenance_date") @db.Date
   status               String    @default("已签约") @db.VarChar(50) // 预备签约|已签约|流失
   industry             String?   @db.VarChar(100)
   employeeCount        String?   @map("employee_count") @db.VarChar(50)

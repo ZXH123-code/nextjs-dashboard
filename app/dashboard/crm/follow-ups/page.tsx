@@ -17,10 +17,10 @@ export default async function FollowUpsPage({
   const filters =
     params.leadId || params.customerId || params.opportunityId
       ? {
-          leadId: params.leadId,
-          customerId: params.customerId,
-          opportunityId: params.opportunityId,
-        }
+        leadId: params.leadId,
+        customerId: params.customerId,
+        opportunityId: params.opportunityId,
+      }
       : undefined;
 
   let followUps: Awaited<ReturnType<typeof getFollowUps>>["items"] = [];

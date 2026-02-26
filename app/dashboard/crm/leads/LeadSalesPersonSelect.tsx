@@ -1,15 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { updateLeadSalesPersonWithFollowUpAction } from "@/app/lib/crm-actions";
+import { setLeadAssigneesWithFollowUpAction } from "@/app/lib/crm-actions";
 import { PermissionDeniedDialog } from "../components/PermissionDeniedDialog";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import {
   Dialog,
   DialogContent,
@@ -23,84 +16,78 @@ import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import { LoadingSpinner } from "@/app/ui/loading-spinner";
 
-const EMPTY_VALUE = "__empty__";
-
 type User = { id: string; name: string };
 
 export function LeadSalesPersonSelect({
   leadId,
-  currentSalesPersonId,
+  currentAssigneeIds,
   users,
   canAssign = true,
   onOptimisticUpdate,
   onRevert,
 }: {
   leadId: string;
-  currentSalesPersonId: string | null;
+  currentAssigneeIds: string[];
   users: User[];
   /** 仅管理员可指定/变更销售人员，sales 为只读 */
   canAssign?: boolean;
-  onOptimisticUpdate?: (newSalesPersonId: string | null) => void;
-  onRevert?: (previousSalesPersonId: string | null) => void;
+  onOptimisticUpdate?: (newAssigneeIds: string[]) => void;
+  onRevert?: (previousAssigneeIds: string[]) => void;
 }) {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [errorDialog, setErrorDialog] = useState<{ open: boolean; message: string }>({
     open: false,
     message: "",
   });
-  const [selectedSalesPersonId, setSelectedSalesPersonId] = useState("");
+  const [selectedAssigneeIds, setSelectedAssigneeIds] = useState<string[]>([]);
   const [supplement, setSupplement] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const currentSalesPerson = users.find((u) => u.id === currentSalesPersonId);
-  const selectedPerson = users.find((u) => u.id === selectedSalesPersonId);
+  const currentAssignees = users.filter((u) => currentAssigneeIds.includes(u.id));
+  const selectedAssignees = users.filter((u) => selectedAssigneeIds.includes(u.id));
 
   if (!canAssign) {
     return (
       <span className="text-muted-foreground text-xs">
-        {currentSalesPerson?.name ?? "未指定"}
+        {currentAssignees.length > 0 ? currentAssignees.map((u) => u.name).join(", ") : "未指定"}
       </span>
     );
   }
 
-  const handleSalesPersonChange = (newValue: string) => {
-    const newSalesPersonId = newValue === EMPTY_VALUE ? "" : newValue;
-    if (newSalesPersonId === (currentSalesPersonId ?? "")) return;
-
-    setSelectedSalesPersonId(newSalesPersonId);
+  const openDialog = () => {
+    setSelectedAssigneeIds(Array.from(new Set(currentAssigneeIds)));
     setSupplement("");
     setIsDialogOpen(true);
   };
 
-  const selectValue = (currentSalesPersonId ?? "") || EMPTY_VALUE;
+  const currentSet = new Set(currentAssigneeIds);
+  const selectedSet = new Set(selectedAssigneeIds);
+  const added = selectedAssignees.filter((u) => !currentSet.has(u.id));
+  const removed = currentAssignees.filter((u) => !selectedSet.has(u.id));
 
-  // 与批量指定一致的默认说明：未指定→指定 / 变更负责人 / 取消指定
-  const defaultLine = selectedSalesPersonId
-    ? currentSalesPersonId
-      ? `线索负责人由 ${currentSalesPerson?.name ?? "未指定"} 变更为 ${selectedPerson?.name ?? ""}`
-      : `线索已分配给 ${selectedPerson?.name ?? ""}`
-    : "线索负责人已取消指定";
+  const defaultLines = [
+    ...(added.length > 0 ? [`线索负责人新增：${added.map((u) => u.name).join("，")}`] : []),
+    ...(removed.length > 0 ? [`线索负责人移除：${removed.map((u) => u.name).join("，")}`] : []),
+    ...(added.length === 0 && removed.length === 0 ? ["线索负责人未发生变化"] : []),
+  ];
 
   const handleConfirm = async () => {
-    const content = supplement.trim() ? `${defaultLine}\n${supplement.trim()}` : defaultLine;
-    const previousId = currentSalesPersonId ?? null;
-    const newId = selectedSalesPersonId || null;
-    onOptimisticUpdate?.(newId);
+    const defaultText = defaultLines.join("\n");
+    const content = supplement.trim() ? `${defaultText}\n${supplement.trim()}` : defaultText;
+    const previousIds = Array.from(new Set(currentAssigneeIds));
+    const nextIds = Array.from(new Set(selectedAssigneeIds));
+    onOptimisticUpdate?.(nextIds);
     setIsDialogOpen(false);
     setIsSubmitting(true);
     try {
-      const result = await updateLeadSalesPersonWithFollowUpAction(
-        leadId,
-        newId,
-        content
-      );
+      const result = await setLeadAssigneesWithFollowUpAction(leadId, nextIds, content);
       if (result?.error) {
-        onRevert?.(previousId);
+        onRevert?.(previousIds);
         setErrorDialog({ open: true, message: result.error });
       }
     } catch (error) {
       console.error("分配销售人员失败:", error);
-      onRevert?.(previousId);
+      onRevert?.(previousIds);
       setErrorDialog({ open: true, message: "分配销售人员失败，已恢复原负责人。" });
     } finally {
       setIsSubmitting(false);
@@ -116,19 +103,14 @@ export function LeadSalesPersonSelect({
 
   return (
     <>
-      <Select value={selectValue} onValueChange={handleSalesPersonChange}>
-        <SelectTrigger className="h-8 min-w-[100px] text-xs">
-          <SelectValue placeholder="未指定" />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value={EMPTY_VALUE}>未指定</SelectItem>
-          {users.map((user) => (
-            <SelectItem key={user.id} value={user.id}>
-              {user.name}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+      <Button
+        type="button"
+        variant="outline"
+        className="h-8 min-w-[120px] justify-start text-xs font-normal"
+        onClick={openDialog}
+      >
+        {currentAssignees.length > 0 ? currentAssignees.map((u) => u.name).join(", ") : "未指定"}
+      </Button>
 
       <Dialog open={isDialogOpen} onOpenChange={(open) => !open && handleClose()}>
         <DialogContent className="sm:max-w-md">
@@ -150,7 +132,41 @@ export function LeadSalesPersonSelect({
                 )}
                 aria-live="polite"
               >
-                {defaultLine}
+                {defaultLines.map((l) => (
+                  <div key={l}>{l}</div>
+                ))}
+              </div>
+            </div>
+            <div className="grid gap-2">
+              <Label className="text-muted-foreground">负责人</Label>
+              <div className="max-h-56 overflow-auto rounded-md border border-input bg-background">
+                <div className="p-2 space-y-1">
+                  {users.map((u) => {
+                    const checked = selectedAssigneeIds.includes(u.id);
+                    return (
+                      <label
+                        key={u.id}
+                        className="flex items-center gap-2 rounded px-2 py-1 hover:bg-muted/40"
+                      >
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4 rounded border-input"
+                          checked={checked}
+                          onChange={(e) => {
+                            const next = e.target.checked
+                              ? Array.from(new Set([...selectedAssigneeIds, u.id]))
+                              : selectedAssigneeIds.filter((id) => id !== u.id);
+                            setSelectedAssigneeIds(next);
+                          }}
+                        />
+                        <span className="text-sm">{u.name}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+              <div className="text-xs text-muted-foreground">
+                可勾选多位负责人。取消全部勾选表示「未指定负责人」。
               </div>
             </div>
             <div className="grid gap-2">

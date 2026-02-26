@@ -80,8 +80,7 @@ type Lead = {
   createdAt: Date;
   customerTier?: string | null;
   status: string;
-  salesPersonId: string | null;
-  salesPerson: { id: string; name: string } | null;
+  assignees: { userId: string; user: { id: string; name: string } }[];
   isClaimed?: boolean;
   isKeyFocus?: boolean;
   keyFocusByAdmin?: boolean;
@@ -211,7 +210,7 @@ export function LeadsTableWithBulk({
     { key: "contactPhone", label: "联系方式", type: "text" },
     { key: "customerTier", label: "客户等级", type: "text" },
     { key: "status", label: "状态", type: "select", options: LEAD_STATUS.map((s) => ({ value: s, label: s })) },
-    { key: "salesPerson.name", label: "销售人员", type: "text" },
+    { key: "assignees.name", label: "负责人", type: "text" },
     { key: "isKeyFocus", label: "重点关注", type: "boolean" },
     { key: "keyFocusByAdmin", label: "管理员标注", type: "boolean" },
     { key: "createdAt", label: "创建时间", type: "date" },
@@ -520,7 +519,6 @@ export function LeadsTableWithBulk({
       formData.append("leadSource", newSource);
       formData.append("contactPhone", lead.contactPhone ?? "");
       formData.append("customerTier", lead.customerTier ?? "");
-      formData.append("salesPersonId", lead.salesPersonId ?? "");
       formData.append("status", lead.status);
       formData.append("inline", "1");
       const result = await updateLeadAction(null, formData);
@@ -610,7 +608,6 @@ export function LeadsTableWithBulk({
       formData.append("leadSource", lead.leadSource ?? "");
       formData.append("contactPhone", lead.contactPhone ?? "");
       formData.append("customerTier", lead.customerTier ?? "");
-      formData.append("salesPersonId", lead.salesPersonId ?? "");
       formData.append("status", lead.status);
       formData.append("inline", "1");
       formData.set(editingField, editingValue);
@@ -664,8 +661,9 @@ export function LeadsTableWithBulk({
     }
   };
 
+  const leadAssigneeIds = (lead: Lead) => lead.assignees?.map((a) => a.userId) ?? [];
   const canEditLead = (lead: Lead) =>
-    isAdmin || (currentUserId != null && lead.salesPersonId === currentUserId);
+    isAdmin || (currentUserId != null && leadAssigneeIds(lead).includes(currentUserId));
 
   const getFieldTextMaxWidthClass = (field: string) => {
     switch (field) {
@@ -802,7 +800,7 @@ export function LeadsTableWithBulk({
 
   const LeadFlowBar = ({ lead }: { lead: Lead }) => {
     const stage = getFlowStage(lead);
-    const hasAssignee = !!lead.salesPersonId;
+    const hasAssignee = (lead.assignees?.length ?? 0) > 0;
     const config: { label: string; Icon: typeof UserRound; title: string; className: string } =
       stage === 1
         ? {
@@ -1139,30 +1137,38 @@ export function LeadsTableWithBulk({
                       <td className="px-4 py-3">
                         <LeadSalesPersonSelect
                           leadId={lead.id}
-                          currentSalesPersonId={lead.salesPersonId}
+                          currentAssigneeIds={lead.assignees.map((a) => a.userId)}
                           users={users}
                           canAssign={isAdmin}
-                          onOptimisticUpdate={(newId) =>
+                          onOptimisticUpdate={(newIds) =>
                             setRows((prev) =>
                               prev.map((r) =>
                                 r.id === lead.id
                                   ? {
                                     ...r,
-                                    salesPersonId: newId ?? null,
-                                    salesPerson: newId ? users.find((u) => u.id === newId) ?? null : null,
+                                    assignees: newIds
+                                      .map((id) => {
+                                        const u = users.find((x) => x.id === id);
+                                        return u ? { userId: id, user: u } : null;
+                                      })
+                                      .filter(Boolean) as { userId: string; user: { id: string; name: string } }[],
                                   }
                                   : r
                               )
                             )
                           }
-                          onRevert={(prevId) =>
+                          onRevert={(prevIds) =>
                             setRows((prev) =>
                               prev.map((r) =>
                                 r.id === lead.id
                                   ? {
                                     ...r,
-                                    salesPersonId: prevId ?? null,
-                                    salesPerson: prevId ? users.find((u) => u.id === prevId) ?? null : null,
+                                    assignees: prevIds
+                                      .map((id) => {
+                                        const u = users.find((x) => x.id === id);
+                                        return u ? { userId: id, user: u } : null;
+                                      })
+                                      .filter(Boolean) as { userId: string; user: { id: string; name: string } }[],
                                   }
                                   : r
                               )
@@ -1352,20 +1358,20 @@ export function LeadsTableWithBulk({
         <Dialog open={batchAssignOpen} onOpenChange={setBatchAssignOpen}>
           <DialogContent className="sm:max-w-md">
             <DialogHeader>
-              <DialogTitle>批量指定负责人</DialogTitle>
+              <DialogTitle>批量追加负责人</DialogTitle>
               <DialogDescription>
-                已选 {selectedIds.size} 条线索。选择销售人员后会自动生成一条默认跟进说明（随选择的人变化），您可在下方补充更多说明。
+                已选 {selectedIds.size} 条线索。选择负责人后将为这些线索追加该负责人，并自动生成一条默认跟进说明，您可在下方补充更多说明。
               </DialogDescription>
             </DialogHeader>
             <div className="grid gap-4 py-2">
               <div className="grid gap-2">
-                <Label htmlFor="bulk-sales-person">销售人员</Label>
+                <Label htmlFor="bulk-sales-person">负责人</Label>
                 <Select
                   value={batchAssignSalesPersonId}
                   onValueChange={setBatchAssignSalesPersonId}
                 >
                   <SelectTrigger id="bulk-sales-person" className="w-full">
-                    <SelectValue placeholder="选择销售人员" />
+                    <SelectValue placeholder="选择负责人" />
                   </SelectTrigger>
                   <SelectContent>
                     {users.map((u) => (
@@ -1378,20 +1384,20 @@ export function LeadsTableWithBulk({
                 {batchAssignSalesPersonId && (() => {
                   const selectedPerson = users.find((u) => u.id === batchAssignSalesPersonId);
                   const alreadyAssignedCount = Array.from(selectedIds).filter(
-                    (id) => rows.find((r) => r.id === id)?.salesPersonId === batchAssignSalesPersonId
+                    (id) => rows.find((r) => r.id === id)?.assignees?.some((a) => a.userId === batchAssignSalesPersonId)
                   ).length;
                   const toUpdateCount = selectedIds.size - alreadyAssignedCount;
                   if (alreadyAssignedCount === selectedIds.size) {
                     return (
                       <p className="text-sm text-muted-foreground">
-                        所选 {selectedIds.size} 条线索均已由 <strong>{selectedPerson?.name}</strong> 负责，提交后将不会变更。
+                        所选 {selectedIds.size} 条线索均已包含负责人 <strong>{selectedPerson?.name}</strong>，提交后将不会变更。
                       </p>
                     );
                   }
                   if (alreadyAssignedCount > 0) {
                     return (
                       <p className="text-sm text-muted-foreground">
-                        所选 {selectedIds.size} 条中，{alreadyAssignedCount} 条已由 <strong>{selectedPerson?.name}</strong> 负责，提交后将只更新其余 {toUpdateCount} 条。
+                        所选 {selectedIds.size} 条中，{alreadyAssignedCount} 条已包含负责人 <strong>{selectedPerson?.name}</strong>，提交后将只更新其余 {toUpdateCount} 条。
                       </p>
                     );
                   }
@@ -1413,9 +1419,9 @@ export function LeadsTableWithBulk({
                   aria-live="polite"
                 >
                   {batchAssignSalesPersonId ? (
-                    <>批量线索已分配给 {users.find((u) => u.id === batchAssignSalesPersonId)?.name ?? ""}</>
+                    <>批量线索新增负责人 {users.find((u) => u.id === batchAssignSalesPersonId)?.name ?? ""}</>
                   ) : (
-                    "请先选择销售人员，将自动生成"
+                    "请先选择负责人，将自动生成"
                   )}
                 </div>
               </div>
@@ -1477,7 +1483,7 @@ export function LeadsTableWithBulk({
                 { key: "customerTier", label: "客户等级", editable: true },
                 { key: "remark", label: "线索备注", editable: true },
                 { key: "createdAt", label: "创建时间", editable: false },
-                { key: "salesPersonId", label: "销售人员", editable: true },
+                { key: "assignees", label: "负责人", editable: true },
                 { key: "status", label: "状态", editable: true },
               ];
               return (
@@ -1496,33 +1502,41 @@ export function LeadsTableWithBulk({
                               {lead.createdAt.toLocaleString("zh-CN")}
                             </span>
                           )}
-                          {key === "salesPersonId" && (
+                          {key === "assignees" && (
                             <LeadSalesPersonSelect
                               leadId={lead.id}
-                              currentSalesPersonId={lead.salesPersonId}
+                              currentAssigneeIds={lead.assignees.map((a) => a.userId)}
                               users={users}
                               canAssign={isAdmin}
-                              onOptimisticUpdate={(newId) =>
+                              onOptimisticUpdate={(newIds) =>
                                 setRows((prev) =>
                                   prev.map((r) =>
                                     r.id === lead.id
                                       ? {
                                         ...r,
-                                        salesPersonId: newId ?? null,
-                                        salesPerson: newId ? users.find((u) => u.id === newId) ?? null : null,
+                                        assignees: newIds
+                                          .map((id) => {
+                                            const u = users.find((x) => x.id === id);
+                                            return u ? { userId: id, user: u } : null;
+                                          })
+                                          .filter(Boolean) as { userId: string; user: { id: string; name: string } }[],
                                       }
                                       : r
                                   )
                                 )
                               }
-                              onRevert={(prevId) =>
+                              onRevert={(prevIds) =>
                                 setRows((prev) =>
                                   prev.map((r) =>
                                     r.id === lead.id
                                       ? {
                                         ...r,
-                                        salesPersonId: prevId ?? null,
-                                        salesPerson: prevId ? users.find((u) => u.id === prevId) ?? null : null,
+                                        assignees: prevIds
+                                          .map((id) => {
+                                            const u = users.find((x) => x.id === id);
+                                            return u ? { userId: id, user: u } : null;
+                                          })
+                                          .filter(Boolean) as { userId: string; user: { id: string; name: string } }[],
                                       }
                                       : r
                                   )
@@ -1549,7 +1563,7 @@ export function LeadsTableWithBulk({
                               }}
                             />
                           )}
-                          {editable && key !== "createdAt" && key !== "salesPersonId" && key !== "status" && (
+                          {editable && key !== "createdAt" && key !== "assignees" && key !== "status" && (
                             renderLeadCell(lead, key, getLeadFieldValue(lead, key) || "-", { align: "left" })
                           )}
                         </div>

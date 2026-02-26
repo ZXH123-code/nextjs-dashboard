@@ -21,7 +21,6 @@ type Lead = {
   industry: string | null;
   leadSource: string | null;
   customerTier: string | null;
-  salesPersonId: string | null;
   status: string;
   remark: string | null;
   importSource: string | null;
@@ -129,18 +128,6 @@ export function EditLeadForm({
           defaultValue={lead.remark ?? ""}
           placeholder="可记录客户需求、背景信息等"
           className="min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-        />
-      </div>
-      <div className="space-y-2">
-        <Label>销售人员</Label>
-        <FormSelect
-          name="salesPersonId"
-          value={lead.salesPersonId ?? ""}
-          options={[
-            { value: "", label: "未指定" },
-            ...users.map((u) => ({ value: u.id, label: u.name })),
-          ]}
-          placeholder="选择销售人员"
         />
       </div>
       <div className="space-y-2">

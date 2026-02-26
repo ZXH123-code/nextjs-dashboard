@@ -257,8 +257,7 @@ export async function POST(req: Request) {
         return;
       }
 
-      // 销售人员：当前版本仅支持「批量指定」，未指定时全部为未分配
-      const salesPersonId: string | null = resolvedBatchSalesId;
+      // 负责人：当前版本仅支持「批量指定」（导入后统一写入负责人关联表），未指定时全部为未分配
 
       // 组装扩展字段：所有非规范表头、且有值的列
       const extraFields: Record<string, unknown> = {};
@@ -313,7 +312,6 @@ export async function POST(req: Request) {
         leadSource,
         customerTier,
         remark,
-        salesPersonId: salesPersonId || undefined,
         status: "未跟进",
         importSource,
         extraFields: extraCount > 0 ? (extraFields as Prisma.InputJsonValue) : undefined,
@@ -367,17 +365,20 @@ export async function POST(req: Request) {
       data: dataToInsert,
     });
 
-    // 若本次导入时批量指定了销售人员，则为新创建的线索记录指派变更通知，供管理员发送邮件
+    // 若本次导入时批量指定了负责人：写入负责人关联表，并记录变更通知，供管理员发送邮件
     if (!isPreviewOnly && resolvedBatchSalesId && userId && result.count > 0) {
       const newLeads = await prisma.crm_lead.findMany({
         where: {
           importSource,
-          salesPersonId: resolvedBatchSalesId,
           createdAt: { gte: importStartedAt },
         },
         select: { id: true },
       });
       if (newLeads.length > 0) {
+        await prisma.crm_lead_assignee.createMany({
+          data: newLeads.map((l) => ({ leadId: l.id, userId: resolvedBatchSalesId })),
+          skipDuplicates: true,
+        });
         await recordLeadAssignmentChanges(
           newLeads.map((l) => ({
             leadId: l.id,

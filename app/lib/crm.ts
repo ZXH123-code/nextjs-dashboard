@@ -1,7 +1,7 @@
 /**
  * CRM 数据层：线索、商机、客户、跟进记录
  * 状态流转：线索(有意向)→商机 → 商机(待签约/已赢单)→客户
- * 权限：admin 看全部，sales 只看 salesPersonId = 自己的记录
+ * 权限：admin 看全部，sales 只看「自己在负责人列表」的记录
  */
 
 import { auth } from "@/auth";
@@ -43,6 +43,10 @@ function salesFilter(userId: string) {
   return { salesPersonId: userId };
 }
 
+function leadAssigneeFilter(userId: string): Prisma.crm_leadWhereInput {
+  return { assignees: { some: { userId } } };
+}
+
 /** 未登录时返回空数据（理论上 middleware 会拦截，此处兜底） */
 const emptyWhere = { id: "00000000-0000-0000-0000-000000000000" }; // 不可能存在的 id
 
@@ -52,7 +56,7 @@ const emptyWhere = { id: "00000000-0000-0000-0000-000000000000" }; // 不可能�
  * @param includeDeleted 是否包含已删除的记录（默认 false，仅管理员恢复时使用）
  */
 function buildLeadWhere(auth: CrmAuth, includeDeleted = false) {
-  const base = !auth ? emptyWhere : auth.role === "admin" ? {} : salesFilter(auth.userId);
+  const base = !auth ? emptyWhere : auth.role === "admin" ? {} : leadAssigneeFilter(auth.userId);
 
   // 软删除过滤：默认只查询未删除的记录
   const deletedFilter = includeDeleted ? {} : { deletedAt: null };
@@ -112,7 +116,7 @@ function conditionToPrisma(
   const boolFields = ["isKeyFocus", "keyFocusByAdmin"];
   const dateFields = ["createdAt"];
 
-  const isText = textFields.includes(field) || field === "salesPerson.name";
+  const isText = textFields.includes(field) || field === "salesPerson.name" || field === "assignees.name";
   const isBool = boolFields.includes(field);
   const isDate = dateFields.includes(field);
 
@@ -121,8 +125,10 @@ function conditionToPrisma(
 
   switch (operator) {
     case "equals":
-      if (field === "salesPerson.name") {
-        return { salesPerson: { name: { equals: valStr, mode: "insensitive" } } } as Prisma.crm_leadWhereInput;
+      if (field === "salesPerson.name" || field === "assignees.name") {
+        return {
+          assignees: { some: { user: { name: { equals: valStr, mode: "insensitive" } } } },
+        } as Prisma.crm_leadWhereInput;
       }
       if (isBool) return { [field]: eqVal } as Prisma.crm_leadWhereInput;
       if (isDate && dateVal) {
@@ -133,8 +139,10 @@ function conditionToPrisma(
       return { [field]: { equals: valStr, mode: "insensitive" } } as Prisma.crm_leadWhereInput;
 
     case "notEquals":
-      if (field === "salesPerson.name") {
-        return { salesPerson: { name: { not: { equals: valStr, mode: "insensitive" } } } } as Prisma.crm_leadWhereInput;
+      if (field === "salesPerson.name" || field === "assignees.name") {
+        return {
+          assignees: { some: { user: { name: { not: { equals: valStr, mode: "insensitive" } } } } },
+        } as Prisma.crm_leadWhereInput;
       }
       if (isBool) return { [field]: { not: eqVal } } as Prisma.crm_leadWhereInput;
       if (isDate && dateVal) {
@@ -145,38 +153,46 @@ function conditionToPrisma(
       return { [field]: { not: { equals: valStr, mode: "insensitive" } } } as Prisma.crm_leadWhereInput;
 
     case "contains":
-      if (field === "salesPerson.name") {
-        return { salesPerson: { name: { contains: valStr, mode: "insensitive" } } } as Prisma.crm_leadWhereInput;
+      if (field === "salesPerson.name" || field === "assignees.name") {
+        return {
+          assignees: { some: { user: { name: { contains: valStr, mode: "insensitive" } } } },
+        } as Prisma.crm_leadWhereInput;
       }
       return { [field]: { contains: valStr, mode: "insensitive" } } as Prisma.crm_leadWhereInput;
 
     case "notContains":
-      if (field === "salesPerson.name") {
-        return { salesPerson: { name: { not: { contains: valStr, mode: "insensitive" } } } } as Prisma.crm_leadWhereInput;
+      if (field === "salesPerson.name" || field === "assignees.name") {
+        return {
+          assignees: { some: { user: { name: { not: { contains: valStr, mode: "insensitive" } } } } },
+        } as Prisma.crm_leadWhereInput;
       }
       return { [field]: { not: { contains: valStr, mode: "insensitive" } } } as Prisma.crm_leadWhereInput;
 
     case "startsWith":
-      if (field === "salesPerson.name") {
-        return { salesPerson: { name: { startsWith: valStr, mode: "insensitive" } } } as Prisma.crm_leadWhereInput;
+      if (field === "salesPerson.name" || field === "assignees.name") {
+        return {
+          assignees: { some: { user: { name: { startsWith: valStr, mode: "insensitive" } } } },
+        } as Prisma.crm_leadWhereInput;
       }
       return { [field]: { startsWith: valStr, mode: "insensitive" } } as Prisma.crm_leadWhereInput;
 
     case "endsWith":
-      if (field === "salesPerson.name") {
-        return { salesPerson: { name: { endsWith: valStr, mode: "insensitive" } } } as Prisma.crm_leadWhereInput;
+      if (field === "salesPerson.name" || field === "assignees.name") {
+        return {
+          assignees: { some: { user: { name: { endsWith: valStr, mode: "insensitive" } } } },
+        } as Prisma.crm_leadWhereInput;
       }
       return { [field]: { endsWith: valStr, mode: "insensitive" } } as Prisma.crm_leadWhereInput;
 
     case "isEmpty":
-      if (field === "salesPerson.name") {
-        return { OR: [{ salesPersonId: null }, { salesPerson: { name: "" } }] };
+      if (field === "salesPerson.name" || field === "assignees.name") {
+        return { assignees: { none: {} } } as Prisma.crm_leadWhereInput;
       }
       return { OR: [{ [field]: null }, { [field]: "" }] } as Prisma.crm_leadWhereInput;
 
     case "isNotEmpty":
-      if (field === "salesPerson.name") {
-        return { AND: [{ salesPersonId: { not: null } }, { salesPerson: { name: { not: "" } } }] };
+      if (field === "salesPerson.name" || field === "assignees.name") {
+        return { assignees: { some: {} } } as Prisma.crm_leadWhereInput;
       }
       return { AND: [{ [field]: { not: null } }, { [field]: { not: "" } }] } as Prisma.crm_leadWhereInput;
 
@@ -216,7 +232,10 @@ function buildLeadWhereFromFilter(filter: LeadFilter | undefined): Prisma.crm_le
 /** getLeads 返回的线索项类型（含 salesPerson、opportunity） */
 export type LeadListItem = Prisma.crm_leadGetPayload<{
   include: {
-    salesPerson: { select: { id: true; name: true } };
+    assignees: {
+      orderBy: { createdAt: "asc" };
+      include: { user: { select: { id: true; name: true } } };
+    };
     opportunity: {
       select: { id: true; name: true; customer: { select: { id: true; status: true } } };
     };
@@ -236,7 +255,7 @@ export async function getLeads(
   };
   const orderBy = [{ isKeyFocus: "desc" as const }, { createdAt: "desc" as const }];
   const include = {
-    salesPerson: { select: { id: true, name: true } },
+    assignees: { orderBy: { createdAt: "asc" as const }, include: { user: { select: { id: true, name: true } } } },
     opportunity: {
       select: { id: true, name: true, customer: { select: { id: true, status: true } } },
     },
@@ -335,7 +354,7 @@ export async function getDeletedLeads(auth: CrmAuth) {
     },
     orderBy: { deletedAt: "desc" }, // 按删除时间倒序
     include: {
-      salesPerson: { select: { id: true, name: true } },
+      assignees: { orderBy: { createdAt: "asc" as const }, include: { user: { select: { id: true, name: true } } } },
       opportunity: {
         select: { id: true, name: true, status: true },
       },
@@ -345,13 +364,13 @@ export async function getDeletedLeads(auth: CrmAuth) {
 
 export async function getLeadById(id: string, auth: CrmAuth, includeDeleted = false) {
   if (!auth) return null;
-  const baseWhere = auth.role === "admin" ? { id } : { id, ...salesFilter(auth.userId) };
+  const baseWhere = auth.role === "admin" ? { id } : { id, ...leadAssigneeFilter(auth.userId) };
   const deletedFilter = includeDeleted ? {} : { deletedAt: null };
   const where = { ...baseWhere, ...deletedFilter };
   return prisma.crm_lead.findFirst({
     where,
     include: {
-      salesPerson: { select: { id: true, name: true } },
+      assignees: { orderBy: { createdAt: "asc" as const }, include: { user: { select: { id: true, name: true } } } },
       opportunity: { select: { id: true, name: true } },
     },
   });
@@ -369,9 +388,10 @@ export async function createLead(data: {
   customerTier?: string;
   contactPhone?: string;
   remark?: string;
-  salesPersonId?: string;
+  assigneeIds?: string[];
   status?: string;
 }) {
+  const assigneeIds = (data.assigneeIds ?? []).filter(Boolean);
   return prisma.crm_lead.create({
     data: {
       customerName: data.customerName,
@@ -385,8 +405,10 @@ export async function createLead(data: {
       customerTier: data.customerTier,
       contactPhone: data.contactPhone,
       remark: data.remark,
-      salesPersonId: data.salesPersonId,
       status: data.status ?? "未跟进",
+      ...(assigneeIds.length > 0 && {
+        assignees: { create: assigneeIds.map((userId) => ({ userId })) },
+      }),
     },
   });
 }
@@ -400,22 +422,26 @@ export async function updateLeadStatus(id: string, status: string) {
   });
 }
 
-export async function updateLeadSalesPerson(id: string, salesPersonId: string | null) {
-  return prisma.crm_lead.update({
-    where: { id },
-    data: { salesPersonId },
+/** 设置线索负责人列表（全量覆盖） */
+export async function setLeadAssignees(leadId: string, userIds: string[]) {
+  const ids = Array.from(new Set((userIds ?? []).filter(Boolean)));
+  await prisma.$transaction(async (tx) => {
+    await tx.crm_lead_assignee.deleteMany({ where: { leadId } });
+    if (ids.length > 0) {
+      await tx.crm_lead_assignee.createMany({
+        data: ids.map((userId) => ({ leadId, userId })),
+        skipDuplicates: true,
+      });
+    }
   });
 }
 
-/** 批量更新线索的销售人员 */
-export async function updateLeadSalesPersonBatch(
-  leadIds: string[],
-  salesPersonId: string | null
-) {
-  if (leadIds.length === 0) return;
-  await prisma.crm_lead.updateMany({
-    where: { id: { in: leadIds } },
-    data: { salesPersonId },
+/** 批量给多条线索「追加」同一个负责人（不影响已有负责人） */
+export async function addLeadAssigneeBatch(leadIds: string[], userId: string) {
+  if (!leadIds?.length || !userId) return;
+  await prisma.crm_lead_assignee.createMany({
+    data: leadIds.map((leadId) => ({ leadId, userId })),
+    skipDuplicates: true,
   });
 }
 
@@ -433,7 +459,6 @@ export async function updateLead(
     customerTier?: string;
     contactPhone?: string;
     remark?: string;
-    salesPersonId?: string | null;
     status?: string;
     isKeyFocus?: boolean;
   }
@@ -452,7 +477,6 @@ export async function updateLead(
       ...(data.customerTier !== undefined && { customerTier: data.customerTier }),
       ...(data.contactPhone !== undefined && { contactPhone: data.contactPhone }),
       ...(data.remark !== undefined && { remark: data.remark }),
-      ...(data.salesPersonId !== undefined && { salesPersonId: data.salesPersonId }),
       ...(data.status != null && { status: data.status }),
       ...(data.isKeyFocus !== undefined && { isKeyFocus: data.isKeyFocus }),
     },
@@ -937,7 +961,7 @@ export async function getFollowUps(
       ...where,
       OR: [
         { followUpById: auth.userId },
-        { lead: { salesPersonId: auth.userId } },
+        { lead: { assignees: { some: { userId: auth.userId } } } },
         { customer: { salesPersonId: auth.userId } },
         { opportunity: { salesPersonId: auth.userId } },
       ],
@@ -1059,7 +1083,7 @@ export async function getFollowUpTimeline(
         contentWhere,
         {
           OR: [
-            { lead: { salesPersonId: auth.userId } },
+            { lead: { assignees: { some: { userId: auth.userId } } } },
             { customer: { salesPersonId: auth.userId } },
             { opportunity: { salesPersonId: auth.userId } },
           ],
@@ -1108,7 +1132,7 @@ export async function getFollowUpByIdIfVisible(
       customerId: true,
       opportunityId: true,
       transitionType: true,
-      lead: { select: { salesPersonId: true } },
+      lead: { select: { assignees: { where: { userId: auth.userId }, select: { userId: true } } } },
       customer: { select: { salesPersonId: true } },
       opportunity: { select: { salesPersonId: true } },
     },
@@ -1116,7 +1140,7 @@ export async function getFollowUpByIdIfVisible(
   if (!row) return null;
   if (auth.role === "admin") return row;
   if (row.followUpById === auth.userId) return row;
-  if (row.lead?.salesPersonId === auth.userId) return row;
+  if (row.lead?.assignees?.length) return row;
   if (row.customer?.salesPersonId === auth.userId) return row;
   if (row.opportunity?.salesPersonId === auth.userId) return row;
   return null;
@@ -1232,7 +1256,14 @@ export async function ensureLeadHasOpportunityIfIntent(leadId: string) {
 /** 线索转商机：当状态变为「有意向」时调用 */
 export async function leadToOpportunity(leadId: string) {
   const lead = await prisma.crm_lead.findUnique({
-    where: { id: leadId, deletedAt: null } // 已删除的线索不能转商机
+    where: { id: leadId, deletedAt: null }, // 已删除的线索不能转商机
+    include: {
+      assignees: {
+        orderBy: { createdAt: "asc" },
+        take: 1,
+        select: { userId: true },
+      },
+    },
   });
   if (!lead) throw new Error("线索不存在或已被删除");
   if (lead.status !== "有意向") throw new Error("仅当线索状态为「有意向」时可转入商机");
@@ -1241,13 +1272,14 @@ export async function leadToOpportunity(leadId: string) {
   if (existing) throw new Error("该线索已转入商机");
 
   const leadRow = lead as { isKeyFocus?: boolean; keyFocusByAdmin?: boolean };
+  const primaryAssigneeId = lead.assignees?.[0]?.userId ?? null;
   const opportunity = await prisma.crm_opportunity.create({
     data: {
       name: lead.customerName,
       leadId: lead.id,
       productType: null,
       status: "初步沟通",
-      salesPersonId: lead.salesPersonId,
+      salesPersonId: primaryAssigneeId,
       contactPhone: lead.contactPhone, // 继承线索的联系方式
       isKeyFocus: leadRow.isKeyFocus ?? false,
       keyFocusByAdmin: leadRow.keyFocusByAdmin ?? false,
@@ -1467,7 +1499,7 @@ export async function globalSearchCrm(
     { industry: { contains: k, mode: "insensitive" as const } },
     { leadSource: { contains: k, mode: "insensitive" as const } },
     { customerTier: { contains: k, mode: "insensitive" as const } },
-    { salesPerson: { name: { contains: k, mode: "insensitive" as const } } },
+    { assignees: { some: { user: { name: { contains: k, mode: "insensitive" as const } } } } },
   ];
   const orOpp = [
     { name: { contains: k, mode: "insensitive" as const } },
