@@ -95,9 +95,17 @@ export default async function LeadsPage({
   const pageSize = Math.max(1, Math.min(100, parseInt(params.pageSize ?? "20", 10) || 20));
   const filter = decodeFilter(params.filter);
 
-  // 搜索点击跳转：若高亮记录不在当前页，先重定向到所在页
+  // 搜索点击跳转：若高亮记录不在当前页，先重定向到所在页；若高亮记录已删除则清除 highlight 避免无法翻页
   if (params.highlight?.trim()) {
     const targetPage = await getPageForLeadId(auth, params.highlight, filter, pageSize);
+    if (targetPage === null) {
+      // 线索已删除或不存在，清除 highlight 避免每次翻页都被重定向回第 1 页
+      const q = new URLSearchParams();
+      q.set("page", String(page));
+      q.set("pageSize", String(pageSize));
+      if (params.filter) q.set("filter", params.filter);
+      redirect(`/dashboard/crm/leads?${q.toString()}`);
+    }
     if (targetPage !== page) {
       const q = new URLSearchParams();
       q.set("page", String(targetPage));

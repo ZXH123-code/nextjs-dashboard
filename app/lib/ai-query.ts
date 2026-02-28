@@ -57,19 +57,20 @@ function buildSchemaPrompt(auth: { userId: string; role: string }): string {
 ## 可用的表（仅限以下 CRM 表，使用表名与列名的数据库实际名称）
 
 - users (id UUID, name VARCHAR, email VARCHAR, role VARCHAR) — 用户/销售人员
-- crm_leads (id, customer_name, nickname, city, address, industry, lead_source, contact_phone, created_at, customer_tier, sales_person_id, status, is_key_focus, key_focus_by_admin, extra_fields JSONB, deleted_at) — 线索；status: 未跟进|跟进中|有意向|无意向；extra_fields 为「其他」扩展字段（JSON，可含 Excel 未映射列），查询时可用 extra_fields->>'key' 或 extra_fields ? 'key'
+- crm_leads (id, customer_name, nickname, city, address, industry, lead_source, contact_phone, created_at, customer_tier, status, is_key_focus, key_focus_by_admin, extra_fields JSONB, deleted_at) — 线索；status: 未跟进|跟进中|有意向|无意向；extra_fields 为「其他」扩展字段（JSON，可含 Excel 未映射列），查询时可用 extra_fields->>'key' 或 extra_fields ? 'key'
+- crm_lead_assignees (lead_id, user_id, created_at) — 线索负责人（多对多）；lead_id -> crm_leads.id，user_id -> users.id；统计某销售负责的线索数需通过此表 JOIN
 - crm_opportunities (id, name, lead_id, product_type, status, amount, contact_phone, created_at, expected_close_date, sales_person_id, delivery_person_id, lost_reason, is_key_focus, key_focus_by_admin) — 商机；status: 初步沟通|方案确认|待签约|已赢单|已丢单
 - crm_customers (id, name, nickname, city, customer_tier, first_maintenance_date, status, industry, employee_count, tags, main_products, contact_phone, opportunity_id, actual_amount, sales_person_id, created_at, is_key_focus, key_focus_by_admin) — 客户；status: 预备签约|已签约|流失
 - crm_follow_ups (id, content, follow_up_by_id, follow_date, contact_person, summary, next_step, customer_needs, status, lead_id, customer_id, opportunity_id, created_at, updated_at) — 跟进记录
 
-关联：crm_leads.sales_person_id -> users.id；crm_opportunities.lead_id -> crm_leads.id, sales_person_id -> users.id；crm_customers.opportunity_id -> crm_opportunities.id, sales_person_id -> users.id；crm_follow_ups.lead_id/customer_id/opportunity_id 关联对应表，follow_up_by_id -> users.id。
+关联：crm_leads 的负责人通过 crm_lead_assignees 关联（crm_lead_assignees.lead_id -> crm_leads.id，crm_lead_assignees.user_id -> users.id）；crm_opportunities.lead_id -> crm_leads.id, sales_person_id -> users.id；crm_customers.opportunity_id -> crm_opportunities.id, sales_person_id -> users.id；crm_follow_ups.lead_id/customer_id/opportunity_id 关联对应表，follow_up_by_id -> users.id。
 
 ## 规则（必须遵守）
 
 1. 每条只能是单独的 SELECT，不要分号、不要多条写在一句里。返回一个查询数组，简单问题 1 条，需要对比/综合时 2～${MAX_QUERIES} 条。
 2. 每条默认在末尾加 LIMIT ${MAX_ROWS}，除非用户明确要求更多。
 3. 当前用户角色：${isAdmin ? "admin（可查看全部数据）" : "sales（仅能查看自己负责的数据）"}。
-4. 若当前用户为 sales，涉及 crm_leads、crm_opportunities、crm_customers 时必须在 WHERE 中加上 sales_person_id 限制，例如 \`sales_person_id = '${userId}'\` 或通过 JOIN users 过滤。
+4. 若当前用户为 sales，涉及 crm_leads 时需通过 crm_lead_assignees 过滤（如 JOIN crm_lead_assignees a ON l.id = a.lead_id AND a.user_id = '${userId}'）；涉及 crm_opportunities、crm_customers 时必须在 WHERE 中加上 sales_person_id = '${userId}' 或通过 JOIN users 过滤。
 5. 查询 crm_leads 时只查未删除的：deleted_at IS NULL。
 6. 使用数据库列名（snake_case），如 customer_name、sales_person_id、created_at。
 7. 日期比较使用标准 PostgreSQL 语法，如 created_at >= '2024-01-01'。`;

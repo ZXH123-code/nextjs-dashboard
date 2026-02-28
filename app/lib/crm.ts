@@ -295,13 +295,13 @@ export async function getPageForNewLead(
   return Math.max(1, Math.ceil((keyFocusCount + 1) / pageSize));
 }
 
-/** 计算某条线索在当前筛选与排序下位于第几页（用于搜索点击跳转高亮） */
+/** 计算某条线索在当前筛选与排序下位于第几页（用于搜索点击跳转高亮）。若线索不存在或已删除则返回 null */
 export async function getPageForLeadId(
   auth: CrmAuth,
   leadId: string,
   filter: LeadFilter | undefined,
   pageSize: number
-): Promise<number> {
+): Promise<number | null> {
   const baseWhere = buildLeadWhere(auth, false);
   const filterWhere = buildLeadWhereFromFilter(filter);
   const listWhere: Prisma.crm_leadWhereInput = { ...baseWhere, ...filterWhere };
@@ -309,7 +309,7 @@ export async function getPageForLeadId(
     where: { id: leadId, ...listWhere },
     select: { isKeyFocus: true, createdAt: true },
   });
-  if (!lead) return 1;
+  if (!lead) return null;
   const beforeWhere: Prisma.crm_leadWhereInput = lead.isKeyFocus
     ? { isKeyFocus: true, createdAt: { gt: lead.createdAt } }
     : { OR: [{ isKeyFocus: true }, { isKeyFocus: false, createdAt: { gt: lead.createdAt } }] };

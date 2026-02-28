@@ -1302,7 +1302,14 @@ export function LeadsTableWithBulk({
                                                 title: "删除成功",
                                               }
                                             );
-                                            window.location.reload();
+                                            // 若删除的是当前高亮线索，移除 URL 中的 highlight 避免重定向异常
+                                            const params = new URLSearchParams(searchParams.toString());
+                                            if (params.get("highlight") === lead.id) {
+                                              params.delete("highlight");
+                                              const qs = params.toString();
+                                              router.replace(qs ? `${pathname}?${qs}` : pathname);
+                                            }
+                                            doRefresh();
                                           }
                                         }
                                       );
