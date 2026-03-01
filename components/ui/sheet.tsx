@@ -29,14 +29,16 @@ SheetOverlay.displayName = DialogPrimitive.Overlay.displayName;
 type SheetContentProps = React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content> & {
   side?: "top" | "right" | "bottom" | "left";
   showCloseButton?: boolean;
+  /** 遮罩层样式，用于减轻变暗程度（如 bg-black/40） */
+  overlayClassName?: string;
 };
 
 const SheetContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
   SheetContentProps
->(({ side = "right", showCloseButton = true, className, children, ...props }, ref) => (
+>(({ side = "right", showCloseButton = true, className, overlayClassName, children, ...props }, ref) => (
   <SheetPortal>
-    <SheetOverlay />
+    <SheetOverlay className={overlayClassName} />
     <DialogPrimitive.Content
       ref={ref}
       className={cn(

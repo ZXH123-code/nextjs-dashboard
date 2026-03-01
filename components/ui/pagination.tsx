@@ -30,7 +30,8 @@ export type PaginationProps = {
 
 function buildHref(basePath: string, page: number, pageSize: number, preserve?: Record<string, string | undefined>) {
   const params = new URLSearchParams();
-  if (page > 1) params.set("page", String(page));
+  // 有 preserve 时始终带上 page，便于服务端区分「分页点击」与「搜索跳转」（后者无 page 参数）
+  if (page > 1 || preserve) params.set("page", String(page));
   if (pageSize !== 20) params.set("pageSize", String(pageSize));
   if (preserve) {
     for (const [k, v] of Object.entries(preserve)) {

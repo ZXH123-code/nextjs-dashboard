@@ -97,6 +97,7 @@ export function AiQuerySheet({ open, onOpenChange }: AiQuerySheetProps) {
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
         side="right"
+        overlayClassName="bg-black/40"
         className="flex flex-col w-full max-w-xl sm:max-w-2xl overflow-hidden p-0"
       >
         <SheetHeader className="shrink-0 border-b bg-muted/30 px-4 py-3 pr-12">

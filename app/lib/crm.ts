@@ -77,6 +77,118 @@ export async function getCrmCounts(auth: CrmAuth) {
   return { leadCount, opportunityCount, customerCount };
 }
 
+/** 驾驶舱图表数据：状态分布、来源分布、近 7 天趋势 */
+export type DashboardChartData = {
+  leadStatusDistribution: { name: string; value: number }[];
+  opportunityStatusDistribution: { name: string; value: number }[];
+  leadSourceDistribution: { name: string; value: number }[];
+  dailyTrend: { date: string; leads: number; opportunities: number; customers: number }[];
+};
+
+export async function getCrmDashboardCharts(auth: CrmAuth): Promise<DashboardChartData> {
+  const leadWhere = buildLeadWhere(auth);
+  const base =
+    !auth ? emptyWhere : auth.role === "admin" ? {} : salesFilter(auth.userId);
+
+  const sevenDaysAgo = new Date();
+  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
+  sevenDaysAgo.setHours(0, 0, 0, 0);
+
+  const [
+    leadStatusGroups,
+    oppStatusGroups,
+    leadSourceGroups,
+    recentLeads,
+    recentOpps,
+    recentCustomers,
+  ] = await Promise.all([
+    prisma.crm_lead.groupBy({
+      by: ["status"],
+      where: leadWhere,
+      _count: { status: true },
+    }),
+    prisma.crm_opportunity.groupBy({
+      by: ["status"],
+      where: base,
+      _count: { status: true },
+    }),
+    prisma.crm_lead.groupBy({
+      by: ["leadSource"],
+      where: {
+        ...leadWhere,
+        AND: [
+          { leadSource: { not: null } },
+          { leadSource: { not: "" } },
+        ],
+      },
+      _count: { leadSource: true },
+    }),
+    prisma.crm_lead.findMany({
+      where: { ...leadWhere, createdAt: { gte: sevenDaysAgo } },
+      select: { createdAt: true },
+    }),
+    prisma.crm_opportunity.findMany({
+      where: { ...base, createdAt: { gte: sevenDaysAgo } },
+      select: { createdAt: true },
+    }),
+    prisma.crm_customer.findMany({
+      where: { ...base, createdAt: { gte: sevenDaysAgo } },
+      select: { createdAt: true },
+    }),
+  ]);
+
+  const dateKey = (d: Date) => d.toISOString().slice(0, 10);
+  const initDates = () => {
+    const dates: string[] = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      dates.push(dateKey(d));
+    }
+    return dates;
+  };
+  const allDates = initDates();
+  const countByDate = (
+    items: { createdAt: Date }[],
+    keyFn: (d: Date) => string
+  ) => {
+    const m = new Map<string, number>();
+    allDates.forEach((d) => m.set(d, 0));
+    items.forEach((item) => {
+      const k = keyFn(item.createdAt);
+      if (m.has(k)) m.set(k, (m.get(k) ?? 0) + 1);
+    });
+    return m;
+  };
+
+  const leadByDate = countByDate(recentLeads, (d) => dateKey(d));
+  const oppByDate = countByDate(recentOpps, (d) => dateKey(d));
+  const customerByDate = countByDate(recentCustomers, (d) => dateKey(d));
+
+  return {
+    leadStatusDistribution: leadStatusGroups.map((g) => ({
+      name: g.status,
+      value: g._count.status,
+    })),
+    opportunityStatusDistribution: oppStatusGroups.map((g) => ({
+      name: g.status,
+      value: g._count.status,
+    })),
+    leadSourceDistribution: leadSourceGroups
+      .filter((g) => g.leadSource)
+      .map((g) => ({
+        name: g.leadSource!,
+        value: g._count.leadSource,
+      })),
+    dailyTrend: allDates.map((date) => ({
+      date: date.slice(5),
+      leads: leadByDate.get(date) ?? 0,
+      opportunities: oppByDate.get(date) ?? 0,
+      customers: customerByDate.get(date) ?? 0,
+    })),
+  };
+}
+
 // ============ 线索 ============
 /** 筛选条件（与 FilterDialog 结构一致，用于 URL 序列化后传入服务端） */
 export type LeadFilterCondition = {
