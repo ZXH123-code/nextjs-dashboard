@@ -86,7 +86,7 @@ export function LeadStatusChart({
               border: "1px solid hsl(214, 32%, 91%)",
               fontSize: 12,
             }}
-            formatter={(value: number) => [value, "数量"]}
+            formatter={(value) => [value ?? 0, "数量"]}
           />
           <Bar
             dataKey="value"
@@ -136,7 +136,7 @@ export function OpportunityStatusChart({
               border: "1px solid hsl(214, 32%, 91%)",
               fontSize: 12,
             }}
-            formatter={(value: number) => [value, "数量"]}
+            formatter={(value) => [value ?? 0, "数量"]}
           />
           <Bar
             dataKey="value"
@@ -179,7 +179,7 @@ export function LeadSourceChart({
             outerRadius={80}
             paddingAngle={2}
             label={({ name, percent }) =>
-              `${name} ${(percent * 100).toFixed(0)}%`
+              `${name} ${((percent ?? 0) * 100).toFixed(0)}%`
             }
             labelLine={false}
           >
@@ -196,7 +196,7 @@ export function LeadSourceChart({
               border: "1px solid hsl(214, 32%, 91%)",
               fontSize: 12,
             }}
-            formatter={(value: number) => [value, "数量"]}
+            formatter={(value) => [value ?? 0, "数量"]}
           />
         </PieChart>
       </ResponsiveContainer>
@@ -240,8 +240,8 @@ export function DailyTrendChart({
               border: "1px solid hsl(214, 32%, 91%)",
               fontSize: 12,
             }}
-            formatter={(value: number, name: string) => [
-              value,
+            formatter={(value, name) => [
+              value ?? 0,
               name === "leads"
                 ? "线索"
                 : name === "opportunities"

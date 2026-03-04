@@ -1140,7 +1140,7 @@ export async function updateOpportunityStatusWithFollowUpAction(
 
   const opp = await prisma.crm_opportunity.findUnique({
     where: { id: opportunityId },
-    select: { salesPersonId: true, status: true, amount: true, customer: { select: { id: true } } },
+    select: { salesPersonId: true, status: true, customer: { select: { id: true } } },
   });
   if (!(await checkCrmPermission(userId, role, opp))) {
     return { error: "无权限" };
@@ -1159,16 +1159,6 @@ export async function updateOpportunityStatusWithFollowUpAction(
   ) {
     return {
       error: `不允许将商机状态从「${currentStatus}」回退到「${newStatus}」，如需修改请联系管理员处理。`,
-    };
-  }
-
-  // 若要变更为「待签约」，必须先填写商机金额
-  if (
-    newStatus === "待签约" &&
-    (opp?.amount == null || Number(opp.amount) <= 0)
-  ) {
-    return {
-      error: "请先在商机表中填写「金额」，再将状态改为「待签约」",
     };
   }
 
@@ -1210,20 +1200,10 @@ export async function updateCustomerStatusWithFollowUpAction(
 
   const customer = await prisma.crm_customer.findUnique({
     where: { id: customerId },
-    select: { salesPersonId: true, actualAmount: true },
+    select: { salesPersonId: true },
   });
   if (!(await checkCrmPermission(userId, role, customer))) {
     return { error: "无权限" };
-  }
-
-  // 若要变更为「已签约」，必须先填写实际成交金额
-  if (
-    newStatus === "已签约" &&
-    (customer?.actualAmount == null || Number(customer.actualAmount) <= 0)
-  ) {
-    return {
-      error: "请先在客户表中填写「实际成交金额」，再将状态改为「已签约」",
-    };
   }
 
   // 更新客户状态
