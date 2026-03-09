@@ -40,7 +40,7 @@ export function LeadsPageActions({ isAdmin }: { isAdmin: boolean }) {
     try {
       const filterParam = searchParams.get("filter") ?? undefined;
       const pageSizeStr = searchParams.get("pageSize") ?? "20";
-      const pageSize = Math.max(1, Math.min(100, parseInt(pageSizeStr, 10) || 20));
+      const pageSize = Math.max(1, Math.min(400, parseInt(pageSizeStr, 10) || 20));
       const result = await createEmptyLeadAction({ pageSize, filterParam });
       if (result?.error) {
         setPermissionDialog({

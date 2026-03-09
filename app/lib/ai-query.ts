@@ -159,6 +159,15 @@ export async function askAiQuestionAction(question: string): Promise<AskAiQuesti
     return toSerializable({ success: false, error: "请输入问题" });
   }
 
+  // 写操作意图检测：本功能仅支持只读查询，不执行删除/更新等，避免模型在摘要阶段“假装执行”并误导用户
+  const writeIntentPatterns = /删除|清空|移除|更新|修改|编辑|添加|插入|创建|写入|批量\s*(删除|更新|修改)/i;
+  if (writeIntentPatterns.test(q)) {
+    return toSerializable({
+      success: false,
+      error: "AI 问数仅支持查询数据，不支持删除、更新、修改等写操作。如需删除或修改线索/商机/客户，请在对应页面的列表中操作。",
+    });
+  }
+
   const apiKey = process.env.AI_GATEWAY_API_KEY ?? process.env.DEEPSEEK_API_KEY ?? process.env.OPENAI_API_KEY;
   if (!apiKey) {
     return toSerializable({ success: false, error: "未配置 AI API Key（AI_GATEWAY_API_KEY / DEEPSEEK_API_KEY / OPENAI_API_KEY 任选其一）" });
@@ -218,7 +227,7 @@ export async function askAiQuestionAction(question: string): Promise<AskAiQuesti
     const dataSnippet = allResults
       .map((rows, i) => `【查询 ${i + 1}】共 ${rows.length} 条\n${JSON.stringify(sanitizeForJson(rows.slice(0, 30)), null, 2)}`)
       .join("\n\n");
-    const summaryPrompt = `用户问题：${q}\n\n以下为 ${allResults.length} 个查询的原始结果（每份已截取前 30 条）：\n\n${dataSnippet}\n\n请你做两件事（必须返回合法 JSON）：\n1. 综合以上结果，用简洁中文回答用户问题；若都为空可说明没有匹配数据。你可以在回答中用 Markdown 表格（如 | 列A | 列B |\\n|--|--|\\n| 1 | 2 |）来重组、汇总数据，或只写文字概括。\n2. 决定是否在回答下方「附带展示原始查询结果表」：当原始结果行数少、列名清晰、直接展示有助于对照时设为 true；当结果很多或你已在回答中用文字/表格概括完毕时设为 false。\n\n只返回一个 JSON 对象，格式：{"answer":"你的回答内容","show_raw_table":true 或 false}。不要其他说明、不要 markdown 代码块包裹。`;
+    const summaryPrompt = `用户问题：${q}\n\n以下为 ${allResults.length} 个查询的原始结果（每份已截取前 30 条）：\n\n${dataSnippet}\n\n重要：本功能只执行了 SELECT 查询，从未执行任何删除、更新、修改等写操作。你必须仅根据上述查询结果作答，不得声称已执行删除/更新/修改等操作；若用户问的是写操作类需求，请明确说明「AI 问数仅支持查询，不支持删除或修改数据」并只描述当前查到的数据情况。\n\n请你做两件事（必须返回合法 JSON）：\n1. 综合以上结果，用简洁中文回答用户问题；若都为空可说明没有匹配数据。你可以在回答中用 Markdown 表格（如 | 列A | 列B |\\n|--|--|\\n| 1 | 2 |）来重组、汇总数据，或只写文字概括。\n2. 决定是否在回答下方「附带展示原始查询结果表」：当原始结果行数少、列名清晰、直接展示有助于对照时设为 true；当结果很多或你已在回答中用文字/表格概括完毕时设为 false。\n\n只返回一个 JSON 对象，格式：{"answer":"你的回答内容","show_raw_table":true 或 false}。不要其他说明、不要 markdown 代码块包裹。`;
 
     const { text: summaryText } = await generateText({
       model,

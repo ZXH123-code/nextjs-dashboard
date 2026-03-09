@@ -2,7 +2,7 @@
 
 import { useState, useEffect, Fragment } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { useAlert } from "@/hooks/use-alert";
 import { useFilter } from "@/hooks/use-filter";
 import { FilterDialog, type FilterField } from "@/components/ui/filter-dialog";
@@ -28,13 +28,21 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
+import { SheetScrollArea } from "@/components/ui/sheet-scroll-area";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { ChevronDown, MessageSquarePlus, Filter, X, Check, Briefcase, UserRound, Star, FileText, MoreHorizontal, ExternalLink, FolderOpen } from "lucide-react";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { ChevronDown, ChevronUp, MessageSquarePlus, Filter, X, Check, Briefcase, UserRound, Star, FileText, MoreHorizontal, ExternalLink, FolderOpen, ArrowUpDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { CUSTOMER_STATUS } from "@/app/lib/crm-constants";
 
@@ -45,6 +53,7 @@ type Customer = {
   city: string | null;
   industry: string | null;
   firstMaintenanceDate: Date | null;
+  signedAt: Date | null;
   status: string;
   actualAmount: any;
   contactPhone: string | null;
@@ -64,14 +73,25 @@ export function CustomersTable({
   currentUserId,
   isAdmin,
   highlightId,
+  basePath,
+  sortBy,
+  sortOrder,
+  /** 默认排序选项，如 { value: "createdAt-desc", label: "默认（创建时间新→旧）" } */
+  defaultSortOption,
 }: {
   customers: Customer[];
   currentUserRole?: string;
   currentUserId?: string;
   isAdmin?: boolean;
   highlightId?: string;
+  basePath?: string;
+  sortBy?: string;
+  sortOrder?: string;
+  defaultSortOption?: { value: string; label: string };
 }) {
   const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const { showAlert, AlertComponent } = useAlert();
   const [expandedCustomerIds, setExpandedCustomerIds] = useState<Set<string>>(new Set());
   const [writeFollowUpCustomerId, setWriteFollowUpCustomerId] = useState<string | null>(null);
@@ -112,6 +132,7 @@ export function CustomersTable({
     { key: "isKeyFocus", label: "重点关注", type: "boolean" },
     { key: "keyFocusByAdmin", label: "管理员标注", type: "boolean" },
     { key: "firstMaintenanceDate", label: "初次维护日期", type: "date" },
+    { key: "signedAt", label: "签约日期", type: "date" },
     { key: "createdAt", label: "创建时间", type: "date" },
   ];
 
@@ -154,6 +175,26 @@ export function CustomersTable({
   const toggleSelectAll = () => {
     if (allFilteredSelected) setSelectedIds(new Set());
     else setSelectedIds(new Set(filteredData.map((c) => c.id)));
+  };
+
+  const buildUrl = (updates: { page?: number; sortBy?: string; sortOrder?: string }) => {
+    const params = new URLSearchParams(searchParams.toString());
+    if (updates.page != null) params.set("page", String(updates.page));
+    if (updates.sortBy !== undefined) {
+      if (updates.sortBy) params.set("sortBy", updates.sortBy);
+      else params.delete("sortBy");
+    }
+    if (updates.sortOrder !== undefined) {
+      if (updates.sortOrder) params.set("sortOrder", updates.sortOrder);
+      else params.delete("sortOrder");
+    }
+    const qs = params.toString();
+    return basePath ? `${basePath}${qs ? `?${qs}` : ""}` : pathname;
+  };
+
+  const handleSortChange = (value: string) => {
+    const [by, order] = value.split("-") as [string, string];
+    if (basePath) router.replace(buildUrl({ page: 1, sortBy: by, sortOrder: order }), { scroll: false });
   };
 
   const handleWriteFollowUp = async (
@@ -229,6 +270,8 @@ export function CustomersTable({
         return customer.firstMaintenanceDate
           ? customer.firstMaintenanceDate.toISOString().split("T")[0]
           : "";
+      case "signedAt":
+        return customer.signedAt ? customer.signedAt.toISOString().split("T")[0] : "";
       case "actualAmount":
         return customer.actualAmount != null ? String(customer.actualAmount) : "";
       default:
@@ -258,9 +301,9 @@ export function CustomersTable({
 
     // 乐观更新：立即更新UI
     const nextValue =
-      editing.field === "firstMaintenanceDate" && editing.value
+      (editing.field === "firstMaintenanceDate" || editing.field === "signedAt") && editing.value
         ? new Date(editing.value)
-        : editing.field === "firstMaintenanceDate"
+        : (editing.field === "firstMaintenanceDate" || editing.field === "signedAt")
           ? null
           : editing.value;
     setRows((prev) =>
@@ -288,6 +331,7 @@ export function CustomersTable({
         "firstMaintenanceDate",
         customer.firstMaintenanceDate ? customer.firstMaintenanceDate.toISOString().split("T")[0] : ""
       );
+      formData.append("signedAt", customer.signedAt ? customer.signedAt.toISOString().split("T")[0] : "");
       formData.append("inline", "1");
       formData.set(editingField, editingValue);
 
@@ -338,6 +382,7 @@ export function CustomersTable({
       case "industry": return "max-w-[110px]";
       case "contactPhone": return "max-w-[130px]";
       case "firstMaintenanceDate": return "max-w-[110px]";
+      case "signedAt": return "max-w-[110px]";
       case "actualAmount": return "max-w-[110px]";
       default: return "max-w-[140px]";
     }
@@ -446,6 +491,34 @@ export function CustomersTable({
               清除筛选
             </Button>
           )}
+          {basePath && sortBy != null && sortOrder != null && (
+            <Select
+              value={`${sortBy}-${sortOrder}`}
+              onValueChange={handleSortChange}
+            >
+              <SelectTrigger className="h-8 min-w-[220px] gap-2">
+                <ArrowUpDown className="h-4 w-4 shrink-0" />
+                <SelectValue placeholder="排序" />
+              </SelectTrigger>
+              <SelectContent>
+                {defaultSortOption && (
+                  <SelectItem value={defaultSortOption.value}>{defaultSortOption.label}</SelectItem>
+                )}
+                {defaultSortOption?.value !== "signedAt-desc" && (
+                  <SelectItem value="signedAt-desc">签约日期 新→旧</SelectItem>
+                )}
+                <SelectItem value="signedAt-asc">签约日期 旧→新</SelectItem>
+                {defaultSortOption?.value !== "createdAt-desc" && (
+                  <SelectItem value="createdAt-desc">创建时间 新→旧</SelectItem>
+                )}
+                <SelectItem value="createdAt-asc">创建时间 旧→新</SelectItem>
+                <SelectItem value="firstMaintenanceDate-desc">初次维护 新→旧</SelectItem>
+                <SelectItem value="firstMaintenanceDate-asc">初次维护 旧→新</SelectItem>
+                <SelectItem value="name-asc">客户名称 A→Z</SelectItem>
+                <SelectItem value="name-desc">客户名称 Z→A</SelectItem>
+              </SelectContent>
+            </Select>
+          )}
         </div>
         <div className="text-sm text-muted-foreground">
           共 {filteredData.length} 条数据
@@ -487,6 +560,7 @@ export function CustomersTable({
               <th className="w-[110px] px-4 py-3 text-center font-medium">行业</th>
               <th className="w-[130px] px-4 py-3 text-center font-medium">联系方式</th>
               <th className="w-[120px] px-4 py-3 text-center font-medium">初次维护日期</th>
+              <th className="w-[120px] px-4 py-3 text-center font-medium">签约日期</th>
               <th className="w-[120px] px-4 py-3 text-center font-medium">实际成交金额</th>
               <th className="w-[130px] px-4 py-3 text-center font-medium">销售人员</th>
               <th className="w-[110px] px-4 py-3 text-center font-medium">状态</th>
@@ -498,7 +572,7 @@ export function CustomersTable({
             {customers.length === 0 ? (
               <tr>
                 <td
-                  colSpan={13}
+                  colSpan={14}
                   className="px-4 py-8 text-center text-muted-foreground"
                 >
                   暂无数据，可从商机（待签约/已赢单）转入客户
@@ -507,7 +581,7 @@ export function CustomersTable({
             ) : filteredData.length === 0 ? (
               <tr>
                 <td
-                  colSpan={13}
+                  colSpan={14}
                   className="px-4 py-8 text-center text-muted-foreground"
                 >
                   没有符合筛选条件的数据
@@ -584,6 +658,14 @@ export function CustomersTable({
                         customer.firstMaintenanceDate
                           ? customer.firstMaintenanceDate.toLocaleDateString("zh-CN")
                           : "-",
+                        "date"
+                      )}
+                    </td>
+                    <td className="px-4 py-3">
+                      {renderCustomerCell(
+                        customer,
+                        "signedAt",
+                        customer.signedAt ? customer.signedAt.toLocaleDateString("zh-CN") : "-",
                         "date"
                       )}
                     </td>
@@ -673,9 +755,20 @@ export function CustomersTable({
                     <tr>
                       <td colSpan={13} className="bg-gray-50 px-4 py-4 !text-left">
                         <div className="rounded-lg border border-gray-200 bg-white p-4 text-left">
-                          <h4 className="mb-3 font-semibold text-gray-900 text-left">
-                            跟进时间线
-                          </h4>
+                          <div className="mb-3 flex items-center justify-between">
+                            <h4 className="font-semibold text-gray-900 text-left">
+                              跟进时间线
+                            </h4>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-8 gap-1.5 text-muted-foreground hover:text-foreground"
+                              onClick={() => toggleExpandedCustomer(customer.id)}
+                            >
+                              <ChevronUp className="h-4 w-4" />
+                              收起
+                            </Button>
+                          </div>
                           <FollowUpTimeline
                             customerId={customer.id}
                             currentUserRole={currentUserRole}
@@ -704,7 +797,7 @@ export function CustomersTable({
                 <SheetHeader className="shrink-0 border-b pb-3 text-left">
                   <SheetTitle>客户详情 · {customer.name}</SheetTitle>
                 </SheetHeader>
-                <div className="mt-4 flex-1 overflow-y-auto space-y-4 text-left sheet-scroll">
+                <SheetScrollArea>
                   <div className="space-y-1.5 text-left">
                     <div className="text-xs font-medium text-muted-foreground">客户名称</div>
                     {/* 输入框最大宽度：改此处的 max-w-sm 即可，如 max-w-md / max-w-lg */}
@@ -757,6 +850,18 @@ export function CustomersTable({
                         customer.firstMaintenanceDate
                           ? customer.firstMaintenanceDate.toLocaleDateString("zh-CN")
                           : "-",
+                        "date",
+                        { align: "left" }
+                      )}
+                    </div>
+                  </div>
+                  <div className="space-y-1.5 text-left">
+                    <div className="text-xs font-medium text-muted-foreground">签约日期</div>
+                    <div className="min-h-[32px] flex items-center text-sm justify-start text-left w-full max-w-sm pl-1">
+                      {renderCustomerCell(
+                        customer,
+                        "signedAt",
+                        customer.signedAt ? customer.signedAt.toLocaleDateString("zh-CN") : "-",
                         "date",
                         { align: "left" }
                       )}
@@ -825,7 +930,16 @@ export function CustomersTable({
                       )}
                     </div>
                   </div>
-                </div>
+
+                  <div className="mt-6 pt-4 border-t">
+                    <h4 className="mb-3 text-sm font-semibold text-foreground">跟进时间线</h4>
+                    <FollowUpTimeline
+                      customerId={customer.id}
+                      currentUserRole={currentUserRole}
+                      currentUserId={currentUserId}
+                    />
+                  </div>
+                </SheetScrollArea>
               </>
             );
           })()}

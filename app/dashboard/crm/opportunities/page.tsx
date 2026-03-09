@@ -1,4 +1,4 @@
-import { getOpportunities, getCrmAuth, getUsers, getPageForOpportunityId } from "@/app/lib/crm";
+import { getOpportunities, getCrmAuth, getUsers, getPageForOpportunityId, OPPORTUNITY_SORT_FIELDS } from "@/app/lib/crm";
 import { OpportunitiesTable } from "./OpportunitiesTable";
 import { Pagination } from "@/components/ui/pagination";
 import Link from "next/link";
@@ -7,7 +7,7 @@ import { lusitana } from "@/app/ui/fonts";
 import { ArrowLeft } from "lucide-react";
 import { auth } from "@/auth";
 
-type SearchParams = { highlight?: string; leadId?: string; page?: string; pageSize?: string };
+type SearchParams = { highlight?: string; leadId?: string; page?: string; pageSize?: string; sortBy?: string; sortOrder?: string };
 
 export default async function OpportunitiesPage({
   searchParams,
@@ -17,22 +17,32 @@ export default async function OpportunitiesPage({
   const params = await searchParams;
   const page = Math.max(1, parseInt(params.page ?? "1", 10) || 1);
   const pageSize = Math.max(1, Math.min(100, parseInt(params.pageSize ?? "20", 10) || 20));
+  const sortBy = params.sortBy && OPPORTUNITY_SORT_FIELDS.includes(params.sortBy as (typeof OPPORTUNITY_SORT_FIELDS)[number])
+    ? (params.sortBy as (typeof OPPORTUNITY_SORT_FIELDS)[number])
+    : "createdAt";
+  const sortOrder = params.sortOrder === "asc" ? "asc" : "desc";
 
   const crmAuth = await getCrmAuth();
 
-  // 搜索点击跳转：若高亮商机不在当前页，先重定向到所在页
+  // 搜索点击跳转：若高亮商机不在当前页，先重定向到所在页。仅默认排序时支持定位
   if (params.highlight?.trim()) {
     const targetPage = await getPageForOpportunityId(
       crmAuth,
       params.highlight,
       pageSize,
-      params.leadId ?? undefined
+      params.leadId ?? undefined,
+      sortBy,
+      sortOrder
     );
     if (targetPage !== page) {
       const q = new URLSearchParams();
       q.set("page", String(targetPage));
       q.set("pageSize", String(pageSize));
       if (params.leadId) q.set("leadId", params.leadId);
+      if (sortBy !== "createdAt" || sortOrder !== "desc") {
+        q.set("sortBy", sortBy);
+        q.set("sortOrder", sortOrder);
+      }
       q.set("highlight", params.highlight);
       redirect(`/dashboard/crm/opportunities?${q.toString()}`);
     }
@@ -49,6 +59,8 @@ export default async function OpportunitiesPage({
         page,
         pageSize,
         leadId: params.leadId ?? undefined,
+        sortBy,
+        sortOrder,
       }),
       getUsers(),
     ]);
@@ -88,6 +100,8 @@ export default async function OpportunitiesPage({
         currentUserId={currentUserId}
         users={users}
         highlightId={params.highlight}
+        sortBy={sortBy}
+        sortOrder={sortOrder}
       />
 
       <Pagination
@@ -96,7 +110,7 @@ export default async function OpportunitiesPage({
         totalPages={Math.ceil(total / pageSize)}
         total={total}
         pageSize={pageSize}
-        preserveParams={{ highlight: params.highlight, leadId: params.leadId }}
+        preserveParams={{ highlight: params.highlight, leadId: params.leadId, sortBy, sortOrder }}
       />
 
       <p className="mt-4 text-sm text-muted-foreground">

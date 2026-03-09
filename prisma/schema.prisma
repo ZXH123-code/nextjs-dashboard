@@ -26,6 +26,7 @@ model users {
   crm_lead_notifications_as_new   crm_lead_assignment_notification[] @relation("notification_new_sales")
   crm_lead_notifications_created  crm_lead_assignment_notification[] @relation("notification_creator")
   crm_customer_materials_uploaded crm_customer_material[]
+  crm_monthly_plan_leads          crm_monthly_plan_lead[]
 }
 
 /// 注册/找回密码等场景的邮箱验证码，单次有效、15 分钟过期
@@ -77,9 +78,27 @@ model crm_lead {
   opportunity             crm_opportunity?
   followUps               crm_follow_up[] // 该线索下的所有跟进记录
   assignmentNotifications crm_lead_assignment_notification[] // 该线索的销售人员变更通知
+  monthlyPlanEntries      crm_monthly_plan_lead[] // 本月计划（同一条线索可加入多人）
 
   @@index([status])
   @@map("crm_leads")
+}
+
+/// 本月计划：线索与跟进人的关联，同一条线索可加入多人本月计划
+model crm_monthly_plan_lead {
+  id        String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  leadId    String   @map("lead_id") @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  planMonth String   @map("plan_month") @db.VarChar(7) // "2026-03"
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+
+  lead crm_lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  user users    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([leadId, userId, planMonth])
+  @@index([userId])
+  @@index([planMonth])
+  @@map("crm_monthly_plan_leads")
 }
 
 /// 线索负责人（多对多）：一条线索可指派多个负责人
@@ -141,6 +160,7 @@ model crm_customer {
   contactPhone         String?   @map("contact_phone") @db.VarChar(20) // 联系方式（手机号，从商机/线索继承）
   opportunityId        String?   @unique @map("opportunity_id") @db.Uuid
   actualAmount         Decimal?  @map("actual_amount") @db.Decimal(12, 2) // 实际成交金额（仅已签约客户需要）
+  signedAt             DateTime? @map("signed_at") @db.Timestamp(6) // 签约日期，状态变为已签约时自动填充，可编辑
   salesPersonId        String?   @map("sales_person_id") @db.Uuid
   createdAt            DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
   isKeyFocus           Boolean   @default(false) @map("is_key_focus") // 从商机/线索继承

@@ -49,3 +49,6 @@ next-env.d.ts
 
 # 脚本
 /scripts
+
+# cursor
+/.cursor

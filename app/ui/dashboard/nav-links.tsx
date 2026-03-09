@@ -50,10 +50,13 @@ function getNavGroups(role: string): NavLinkGroup[] {
         {
           name: "CRM 模块",
           icon: Users,
+          // 漏斗自上而下：已签约 → 待签约 → 商机 → 本月计划 → 线索 → 跟进记录
           subLinks: [
-            { name: "线索管理表", href: "/dashboard/crm/leads" },
-            { name: "商机管理表", href: "/dashboard/crm/opportunities" },
             { name: "客户管理表", href: "/dashboard/crm/customers" },
+            { name: "待签约客户管理表", href: "/dashboard/crm/pending-customers" },
+            { name: "商机管理表", href: "/dashboard/crm/opportunities" },
+            { name: "本月计划", href: "/dashboard/crm/monthly-plan" },
+            { name: "线索管理表", href: "/dashboard/crm/leads" },
             { name: "跟进记录", href: "/dashboard/crm/follow-ups" },
           ],
         },
@@ -139,60 +142,60 @@ function PopoverSubMenu({
     <>
       <AlertComponent />
       <div
-      ref={menuRef}
-      className={cn(
-        "fixed z-[200] ml-1 min-w-[200px] rounded-md shadow-xl",
-        "bg-[var(--sidebar-bg)] border border-[rgba(83,93,125,0.3)]",
-        "animate-in fade-in-0 zoom-in-95 slide-in-from-left-2",
-        "duration-200"
-      )}
-      style={{
-        left: "80px",
-        top: `${position.top}px`,
-      }}
-    >
-      {/* 标题 */}
-      <div className="px-4 py-3 border-b border-[rgba(83,93,125,0.3)]">
-        <span className="text-sm font-medium text-[var(--sidebar-text-hover)]">
-          {link.name}
-        </span>
+        ref={menuRef}
+        className={cn(
+          "fixed z-[200] ml-1 min-w-[200px] rounded-md shadow-xl",
+          "bg-[var(--sidebar-bg)] border border-[rgba(83,93,125,0.3)]",
+          "animate-in fade-in-0 zoom-in-95 slide-in-from-left-2",
+          "duration-200"
+        )}
+        style={{
+          left: "80px",
+          top: `${position.top}px`,
+        }}
+      >
+        {/* 标题 */}
+        <div className="px-4 py-3 border-b border-[rgba(83,93,125,0.3)]">
+          <span className="text-sm font-medium text-[var(--sidebar-text-hover)]">
+            {link.name}
+          </span>
+        </div>
+        {/* 子菜单列表 */}
+        <ul className="py-2">
+          {link.subLinks.map((subLink) => {
+            const isActive = pathname === subLink.href;
+            return (
+              <li key={subLink.name}>
+                <Link
+                  href={subLink.disabled ? "#" : subLink.href}
+                  onClick={(e) => {
+                    if (subLink.disabled) {
+                      e.preventDefault();
+                      showAlert("功能开发中，敬请期待", { type: "info", title: "提示" });
+                    } else {
+                      onClose();
+                    }
+                  }}
+                  className={cn(
+                    "flex items-center px-4 py-2.5 text-sm transition-colors",
+                    subLink.disabled
+                      ? "text-[var(--sidebar-text)]/50 cursor-not-allowed"
+                      : "text-[var(--sidebar-text)] hover:text-[var(--sidebar-text-hover)] hover:bg-[var(--sidebar-bg-secondary)]",
+                    isActive && "text-[var(--sidebar-text-hover)] bg-[var(--sidebar-bg-secondary)]"
+                  )}
+                >
+                  <span className="truncate">{subLink.name}</span>
+                  {subLink.badge && (
+                    <span className="ml-auto">
+                      <Badge text={subLink.badge.text} type={subLink.badge.type} />
+                    </span>
+                  )}
+                </Link>
+              </li>
+            );
+          })}
+        </ul>
       </div>
-      {/* 子菜单列表 */}
-      <ul className="py-2">
-        {link.subLinks.map((subLink) => {
-          const isActive = pathname === subLink.href;
-          return (
-            <li key={subLink.name}>
-              <Link
-                href={subLink.disabled ? "#" : subLink.href}
-                onClick={(e) => {
-                  if (subLink.disabled) {
-                    e.preventDefault();
-                    showAlert("功能开发中，敬请期待", { type: "info", title: "提示" });
-                  } else {
-                    onClose();
-                  }
-                }}
-                className={cn(
-                  "flex items-center px-4 py-2.5 text-sm transition-colors",
-                  subLink.disabled
-                    ? "text-[var(--sidebar-text)]/50 cursor-not-allowed"
-                    : "text-[var(--sidebar-text)] hover:text-[var(--sidebar-text-hover)] hover:bg-[var(--sidebar-bg-secondary)]",
-                  isActive && "text-[var(--sidebar-text-hover)] bg-[var(--sidebar-bg-secondary)]"
-                )}
-              >
-                <span className="truncate">{subLink.name}</span>
-                {subLink.badge && (
-                  <span className="ml-auto">
-                    <Badge text={subLink.badge.text} type={subLink.badge.type} />
-                  </span>
-                )}
-              </Link>
-            </li>
-          );
-        })}
-      </ul>
-    </div>
     </>
   );
 }
@@ -231,115 +234,115 @@ function NavLinkItem({
         <AlertComponent />
         <div className="menu-item relative">
           <button
-          ref={buttonRef}
-          onClick={handleClick}
-          className={cn(
-            "flex w-full h-[50px] items-center px-5 icon-swing relative",
-            "text-[var(--sidebar-text)] transition-colors",
-            "hover:text-[var(--sidebar-text-hover)]",
-            (hasActiveChild || isOpen || showPopover) && "text-[var(--sidebar-text-hover)]"
-          )}
-        >
-          {/* 图标 */}
-          <span
+            ref={buttonRef}
+            onClick={handleClick}
             className={cn(
-              "menu-icon w-[35px] h-[35px] min-w-[35px] flex items-center justify-center",
-              "text-lg rounded transition-colors",
-              "bg-[var(--sidebar-bg-secondary)]",
-              !collapsed && "mr-2.5"
+              "flex w-full h-[50px] items-center px-5 icon-swing relative",
+              "text-[var(--sidebar-text)] transition-colors",
+              "hover:text-[var(--sidebar-text-hover)]",
+              (hasActiveChild || isOpen || showPopover) && "text-[var(--sidebar-text-hover)]"
             )}
           >
-            <LinkIcon className="w-5 h-5" />
-          </span>
-
-          {/* 标题 */}
-          <span
-            className={cn(
-              "text-sm text-left truncate sidebar-content-transition",
-              collapsed ? "hidden" : "flex-1"
-            )}
-          >
-            {link.name}
-          </span>
-
-          {/* Badge */}
-          {link.badge && !collapsed && (
-            <span className="mx-1">
-              <Badge text={link.badge.text} type={link.badge.type} />
+            {/* 图标 */}
+            <span
+              className={cn(
+                "menu-icon w-[35px] h-[35px] min-w-[35px] flex items-center justify-center",
+                "text-lg rounded transition-colors",
+                "bg-[var(--sidebar-bg-secondary)]",
+                !collapsed && "mr-2.5"
+              )}
+            >
+              <LinkIcon className="w-5 h-5" />
             </span>
-          )}
 
-          {/* 展开箭头 - 仅展开状态显示 */}
-          {!collapsed && (
+            {/* 标题 */}
             <span
               className={cn(
-                "w-1.5 h-1.5 border-r-2 border-b-2 border-current",
-                "transition-transform duration-300",
-                isOpen ? "rotate-45" : "-rotate-45"
+                "text-sm text-left truncate sidebar-content-transition",
+                collapsed ? "hidden" : "flex-1"
               )}
-            />
+            >
+              {link.name}
+            </span>
+
+            {/* Badge */}
+            {link.badge && !collapsed && (
+              <span className="mx-1">
+                <Badge text={link.badge.text} type={link.badge.type} />
+              </span>
+            )}
+
+            {/* 展开箭头 - 仅展开状态显示 */}
+            {!collapsed && (
+              <span
+                className={cn(
+                  "w-1.5 h-1.5 border-r-2 border-b-2 border-current",
+                  "transition-transform duration-300",
+                  isOpen ? "rotate-45" : "-rotate-45"
+                )}
+              />
+            )}
+
+            {/* 折叠时的指示点 */}
+            {collapsed && (
+              <span
+                className={cn(
+                  "absolute right-2.5 w-1.5 h-1.5 rounded-full",
+                  "bg-current transition-colors",
+                  (hasActiveChild || showPopover) && "bg-[var(--sidebar-text-hover)]"
+                )}
+              />
+            )}
+          </button>
+
+          {/* 展开状态的子菜单列表 */}
+          {isOpen && !collapsed && (
+            <div className="pl-5 bg-[var(--sidebar-bg-secondary)] submenu-enter overflow-hidden">
+              <ul className="py-1">
+                {link.subLinks.map((subLink) => {
+                  const isActive = pathname === subLink.href;
+                  return (
+                    <li key={subLink.name}>
+                      <Link
+                        href={subLink.disabled ? "#" : subLink.href}
+                        onClick={(e) => {
+                          if (subLink.disabled) {
+                            e.preventDefault();
+                            showAlert("功能开发中，敬请期待", { type: "info", title: "提示" });
+                          }
+                        }}
+                        className={cn(
+                          "flex h-[45px] items-center px-5 text-sm transition-colors",
+                          subLink.disabled
+                            ? "text-[var(--sidebar-text)]/50 cursor-not-allowed"
+                            : "text-[var(--sidebar-text)] hover:text-[var(--sidebar-text-hover)]",
+                          isActive && "text-[var(--sidebar-text-hover)]"
+                        )}
+                      >
+                        <span className="truncate">{subLink.name}</span>
+                        {subLink.badge && (
+                          <span className="ml-2">
+                            <Badge text={subLink.badge.text} type={subLink.badge.type} />
+                          </span>
+                        )}
+                      </Link>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
           )}
 
-          {/* 折叠时的指示点 */}
+          {/* 折叠状态的弹出子菜单 */}
           {collapsed && (
-            <span
-              className={cn(
-                "absolute right-2.5 w-1.5 h-1.5 rounded-full",
-                "bg-current transition-colors",
-                (hasActiveChild || showPopover) && "bg-[var(--sidebar-text-hover)]"
-              )}
+            <PopoverSubMenu
+              link={link}
+              isVisible={showPopover}
+              onClose={() => setShowPopover(false)}
+              triggerRef={buttonRef}
             />
           )}
-        </button>
-
-        {/* 展开状态的子菜单列表 */}
-        {isOpen && !collapsed && (
-          <div className="pl-5 bg-[var(--sidebar-bg-secondary)] submenu-enter overflow-hidden">
-            <ul className="py-1">
-              {link.subLinks.map((subLink) => {
-                const isActive = pathname === subLink.href;
-                return (
-                  <li key={subLink.name}>
-                    <Link
-                      href={subLink.disabled ? "#" : subLink.href}
-                      onClick={(e) => {
-                        if (subLink.disabled) {
-                          e.preventDefault();
-                          showAlert("功能开发中，敬请期待", { type: "info", title: "提示" });
-                        }
-                      }}
-                      className={cn(
-                        "flex h-[45px] items-center px-5 text-sm transition-colors",
-                        subLink.disabled
-                          ? "text-[var(--sidebar-text)]/50 cursor-not-allowed"
-                          : "text-[var(--sidebar-text)] hover:text-[var(--sidebar-text-hover)]",
-                        isActive && "text-[var(--sidebar-text-hover)]"
-                      )}
-                    >
-                      <span className="truncate">{subLink.name}</span>
-                      {subLink.badge && (
-                        <span className="ml-2">
-                          <Badge text={subLink.badge.text} type={subLink.badge.type} />
-                        </span>
-                      )}
-                    </Link>
-                  </li>
-                );
-              })}
-            </ul>
-          </div>
-        )}
-
-        {/* 折叠状态的弹出子菜单 */}
-        {collapsed && (
-          <PopoverSubMenu
-            link={link}
-            isVisible={showPopover}
-            onClose={() => setShowPopover(false)}
-            triggerRef={buttonRef}
-          />
-        )}
-      </div>
+        </div>
       </>
     );
   }

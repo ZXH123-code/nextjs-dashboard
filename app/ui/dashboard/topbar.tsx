@@ -73,20 +73,22 @@ function SearchColumnSkeleton() {
   );
 }
 
-/** 搜索下拉全量骨架：三栏布局，与真实结果一致 */
+const SEARCH_SECTION_LABELS = ["线索", "商机", "客户", "待签约", "本月计划", "跟进"] as const;
+
+/** 搜索下拉全量骨架：六栏布局，与真实结果一致 */
 function SearchDropdownSkeleton() {
   return (
-    <div className="flex divide-x">
-      {(["线索", "商机", "客户"] as const).map((label) => (
-        <div key={label} className="flex-1 min-w-0 flex flex-col">
-          <div className="px-2 py-1.5 border-b bg-muted/40 shrink-0">
-            <div className={cn("h-3.5 w-14 rounded bg-muted", skeletonShimmer)} />
+    <div className="flex divide-x overflow-x-auto">
+      {SEARCH_SECTION_LABELS.map((label) => (
+        <div key={label} className="flex-1 min-w-[100px] shrink-0 flex flex-col">
+          <div className="px-1.5 py-1.5 border-b bg-muted/40 shrink-0">
+            <div className={cn("h-3.5 w-12 rounded bg-muted", skeletonShimmer)} />
           </div>
           <SearchColumnSkeleton />
-          <div className="flex items-center justify-center gap-1 px-2 py-1.5 border-t bg-muted/30 shrink-0">
-            <div className={cn("h-3.5 w-3.5 rounded bg-muted", skeletonShimmer)} />
-            <div className={cn("h-3 w-10 rounded bg-muted", skeletonShimmer)} />
-            <div className={cn("h-3.5 w-3.5 rounded bg-muted", skeletonShimmer)} />
+          <div className="flex items-center justify-center gap-0.5 px-1.5 py-1.5 border-t bg-muted/30 shrink-0">
+            <div className={cn("h-3 w-3 rounded bg-muted", skeletonShimmer)} />
+            <div className={cn("h-2.5 w-8 rounded bg-muted", skeletonShimmer)} />
+            <div className={cn("h-3 w-3 rounded bg-muted", skeletonShimmer)} />
           </div>
         </div>
       ))}
@@ -94,16 +96,31 @@ function SearchDropdownSkeleton() {
   );
 }
 
-const typeLabels: Record<GlobalSearchItem["type"], string> = {
+type SearchSectionType = GlobalSearchItem["type"];
+const typeLabels: Record<SearchSectionType, string> = {
   lead: "线索",
   opportunity: "商机",
   customer: "客户",
+  pendingCustomer: "待签约",
+  monthlyPlan: "本月计划",
+  followUp: "跟进",
 };
-const typePaths: Record<GlobalSearchItem["type"], string> = {
-  lead: "/dashboard/crm/leads",
-  opportunity: "/dashboard/crm/opportunities",
-  customer: "/dashboard/crm/customers",
-};
+
+function getSearchItemPath(item: GlobalSearchItem): string {
+  if (item.type === "followUp") {
+    const param = item.leadId ? "leadId" : item.customerId ? "customerId" : item.opportunityId ? "opportunityId" : null;
+    const value = item.leadId ?? item.customerId ?? item.opportunityId;
+    return param && value ? `/dashboard/crm/follow-ups?${param}=${value}` : "/dashboard/crm/follow-ups";
+  }
+  const basePaths: Record<Exclude<SearchSectionType, "followUp">, string> = {
+    lead: "/dashboard/crm/leads",
+    opportunity: "/dashboard/crm/opportunities",
+    customer: "/dashboard/crm/customers",
+    pendingCustomer: "/dashboard/crm/pending-customers",
+    monthlyPlan: "/dashboard/crm/leads", // 本月计划展示的是线索，跳转到线索表高亮
+  };
+  return `${basePaths[item.type]}?highlight=${item.id}`;
+}
 
 export default function TopBar({ userName, userId }: { userName?: string; userId?: string }) {
   const pathname = usePathname();
@@ -117,12 +134,20 @@ export default function TopBar({ userName, userId }: { userName?: string; userId
   const [searchLeadPage, setSearchLeadPage] = useState(0);
   const [searchOppPage, setSearchOppPage] = useState(0);
   const [searchCustomerPage, setSearchCustomerPage] = useState(0);
+  const [searchPendingCustomerPage, setSearchPendingCustomerPage] = useState(0);
+  const [searchMonthlyPlanPage, setSearchMonthlyPlanPage] = useState(0);
+  const [searchFollowUpPage, setSearchFollowUpPage] = useState(0);
   const [searchResult, setSearchResult] = useState<GlobalSearchResult | null>(null);
   const [searchLoading, setSearchLoading] = useState(false);
-  const [searchSectionLoading, setSearchSectionLoading] = useState<Record<"lead" | "opportunity" | "customer", boolean>>({
+  const [searchSectionLoading, setSearchSectionLoading] = useState<
+    Record<SearchSectionType, boolean>
+  >({
     lead: false,
     opportunity: false,
     customer: false,
+    pendingCustomer: false,
+    monthlyPlan: false,
+    followUp: false,
   });
   const searchClosedRef = useRef(false);
 
@@ -132,7 +157,10 @@ export default function TopBar({ userName, userId }: { userName?: string; userId
       leadPage: number,
       oppPage: number,
       customerPage: number,
-      sectionOnly?: "lead" | "opportunity" | "customer"
+      pendingCustomerPage: number,
+      monthlyPlanPage: number,
+      followUpPage: number,
+      sectionOnly?: SearchSectionType
     ) => {
       if (!keyword.trim()) {
         setSearchResult(null);
@@ -142,20 +170,23 @@ export default function TopBar({ userName, userId }: { userName?: string; userId
       if (sectionOnly) {
         setSearchSectionLoading((prev) => ({ ...prev, [sectionOnly]: true }));
       } else {
-        // 新搜索开始时先清空结果，避免短暂显示上一次结果或全 0 的闪屏
         setSearchResult(null);
         setSearchLoading(true);
       }
       try {
-        const res = await globalSearchCrmAction(keyword.trim(), leadPage, oppPage, customerPage);
+        const res = await globalSearchCrmAction(
+          keyword.trim(),
+          leadPage,
+          oppPage,
+          customerPage,
+          pendingCustomerPage,
+          monthlyPlanPage,
+          followUpPage
+        );
         if (searchClosedRef.current) return;
-        // 仅在有有效数据时更新；null/undefined 时保持为 null，由 UI 显示「未找到相关记录」
-        if (res) {
-          setSearchResult(res);
-        }
+        if (res) setSearchResult(res);
       } catch {
         if (searchClosedRef.current) return;
-        // 错误时不展示三栏 0 条，保持 null，显示「未找到相关记录」
         setSearchResult(null);
       } finally {
         if (!searchClosedRef.current) {
@@ -176,7 +207,10 @@ export default function TopBar({ userName, userId }: { userName?: string; userId
         setSearchLeadPage(0);
         setSearchOppPage(0);
         setSearchCustomerPage(0);
-        fetchSearch(searchKeyword, 0, 0, 0);
+        setSearchPendingCustomerPage(0);
+        setSearchMonthlyPlanPage(0);
+        setSearchFollowUpPage(0);
+        fetchSearch(searchKeyword, 0, 0, 0, 0, 0, 0);
       } else {
         setSearchResult(null);
       }
@@ -184,34 +218,61 @@ export default function TopBar({ userName, userId }: { userName?: string; userId
     return () => clearTimeout(t);
   }, [searchKeyword, fetchSearch]);
 
+  const sectionKeyMap = {
+    lead: "leads",
+    opportunity: "opportunities",
+    customer: "customers",
+    pendingCustomer: "pendingCustomers",
+    monthlyPlan: "monthlyPlans",
+    followUp: "followUps",
+  } as const;
+
   const goSearchPage = useCallback(
-    (
-      type: "lead" | "opportunity" | "customer",
-      delta: number
-    ) => {
+    (type: SearchSectionType, delta: number) => {
       if (!searchResult) return;
-      const setPage =
-        type === "lead"
-          ? setSearchLeadPage
-          : type === "opportunity"
-            ? setSearchOppPage
-            : setSearchCustomerPage;
-      const page =
-        type === "lead"
-          ? searchLeadPage
-          : type === "opportunity"
-            ? searchOppPage
-            : searchCustomerPage;
-      const section = searchResult[type === "lead" ? "leads" : type === "opportunity" ? "opportunities" : "customers"];
+      const setPageMap = {
+        lead: setSearchLeadPage,
+        opportunity: setSearchOppPage,
+        customer: setSearchCustomerPage,
+        pendingCustomer: setSearchPendingCustomerPage,
+        monthlyPlan: setSearchMonthlyPlanPage,
+        followUp: setSearchFollowUpPage,
+      };
+      const pageMap = {
+        lead: searchLeadPage,
+        opportunity: searchOppPage,
+        customer: searchCustomerPage,
+        pendingCustomer: searchPendingCustomerPage,
+        monthlyPlan: searchMonthlyPlanPage,
+        followUp: searchFollowUpPage,
+      };
+      const section = searchResult[sectionKeyMap[type]];
+      const page = pageMap[type];
       const next = page + delta;
       if (next < 0 || next * SEARCH_PAGE_SIZE >= section.total) return;
-      setPage(next);
-      const newLeadPage = type === "lead" ? next : searchLeadPage;
-      const newOppPage = type === "opportunity" ? next : searchOppPage;
-      const newCustomerPage = type === "customer" ? next : searchCustomerPage;
-      fetchSearch(searchKeyword, newLeadPage, newOppPage, newCustomerPage, type);
+      setPageMap[type](next);
+      fetchSearch(
+        searchKeyword,
+        type === "lead" ? next : searchLeadPage,
+        type === "opportunity" ? next : searchOppPage,
+        type === "customer" ? next : searchCustomerPage,
+        type === "pendingCustomer" ? next : searchPendingCustomerPage,
+        type === "monthlyPlan" ? next : searchMonthlyPlanPage,
+        type === "followUp" ? next : searchFollowUpPage,
+        type
+      );
     },
-    [searchKeyword, searchResult, searchLeadPage, searchOppPage, searchCustomerPage, fetchSearch]
+    [
+      searchKeyword,
+      searchResult,
+      searchLeadPage,
+      searchOppPage,
+      searchCustomerPage,
+      searchPendingCustomerPage,
+      searchMonthlyPlanPage,
+      searchFollowUpPage,
+      fetchSearch,
+    ]
   );
 
   const closeSearchDropdown = useCallback(() => {
@@ -219,13 +280,19 @@ export default function TopBar({ userName, userId }: { userName?: string; userId
     setSearchFocused(false);
     setSearchResult(null);
     setSearchLoading(false);
-    setSearchSectionLoading({ lead: false, opportunity: false, customer: false });
+    setSearchSectionLoading({
+      lead: false,
+      opportunity: false,
+      customer: false,
+      pendingCustomer: false,
+      monthlyPlan: false,
+      followUp: false,
+    });
   }, []);
 
   const handleSearchItemClick = useCallback(
     (item: GlobalSearchItem) => {
-      const path = `${typePaths[item.type]}?highlight=${item.id}`;
-      router.push(path);
+      router.push(getSearchItemPath(item));
       setSearchKeyword("");
       setSearchResult(null);
       setSearchFocused(false);
@@ -266,10 +333,13 @@ export default function TopBar({ userName, userId }: { userName?: string; userId
           profile: "个人信息",
           permissions: "权限管理",
           crm: "CRM",
-          leads: "线索管理表",
-          opportunities: "商机管理表",
           customers: "客户管理表",
+          "pending-customers": "待签约客户管理表",
+          opportunities: "商机管理表",
+          "monthly-plan": "本月计划",
+          leads: "线索管理表",
           "follow-ups": "跟进记录",
+          "recycle-bin": "回收站",
           new: "新建",
           list: "列表",
           import: "导入",
@@ -337,7 +407,7 @@ export default function TopBar({ userName, userId }: { userName?: string; userId
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground group-hover:text-foreground transition-colors pointer-events-none z-10" />
               <input
                 type="text"
-                placeholder="搜索线索、商机、客户..."
+                placeholder="搜索线索、商机、客户、待签约、本月计划、跟进..."
                 value={searchKeyword ?? ""}
                 onChange={(e) => setSearchKeyword(e.target.value)}
                 onFocus={() => setSearchFocused(true)}
@@ -354,17 +424,17 @@ export default function TopBar({ userName, userId }: { userName?: string; userId
                 <span>K</span>
               </div>
 
-              {/* 搜索下拉：分栏显示线索 / 商机 / 客户，每表单独分页 */}
+              {/* 搜索下拉：六栏显示线索 / 商机 / 客户 / 待签约 / 本月计划 / 跟进，每表单独分页 */}
               {searchKeyword.trim() && (searchLoading || searchResult !== null) && (
                 <div
-                  className="absolute left-0 right-0 top-full mt-1 rounded-lg border bg-popover text-popover-foreground shadow-lg overflow-hidden w-[560px] max-w-[calc(100vw-2rem)]"
+                  className="absolute left-0 right-0 top-full mt-1 rounded-lg border bg-popover text-popover-foreground shadow-lg overflow-hidden w-[960px] max-w-[calc(100vw-2rem)]"
                   onClick={(e) => e.stopPropagation()}
                   onMouseDown={(e) => e.stopPropagation()}
                 >
                   {searchLoading ? (
                     <SearchDropdownSkeleton />
                   ) : searchResult ? (
-                    <div className="flex divide-x">
+                    <div className="flex divide-x overflow-x-auto">
                       {(
                         [
                           {
@@ -388,9 +458,30 @@ export default function TopBar({ userName, userId }: { userName?: string; userId
                             page: searchCustomerPage,
                             type: "customer" as const,
                           },
+                          {
+                            key: "pendingCustomers",
+                            label: "待签约",
+                            section: searchResult.pendingCustomers,
+                            page: searchPendingCustomerPage,
+                            type: "pendingCustomer" as const,
+                          },
+                          {
+                            key: "monthlyPlans",
+                            label: "本月计划",
+                            section: searchResult.monthlyPlans,
+                            page: searchMonthlyPlanPage,
+                            type: "monthlyPlan" as const,
+                          },
+                          {
+                            key: "followUps",
+                            label: "跟进",
+                            section: searchResult.followUps,
+                            page: searchFollowUpPage,
+                            type: "followUp" as const,
+                          },
                         ] as const
                       ).map(({ key, label, section, page, type }) => (
-                        <div key={key} className="flex-1 min-w-0 flex flex-col relative">
+                        <div key={key} className="flex-1 min-w-[100px] shrink-0 flex flex-col relative">
                           <div className="px-2 py-1.5 border-b bg-muted/40 text-xs font-medium text-muted-foreground shrink-0">
                             {label}（共 {section.total} 条）
                           </div>
@@ -401,55 +492,55 @@ export default function TopBar({ userName, userId }: { userName?: string; userId
                                   <SearchColumnSkeleton />
                                 </div>
                               )}
-                              <ul className="max-h-[200px] overflow-y-auto overflow-x-hidden overscroll-contain shrink min-h-0">
-                            {section.items.length === 0 ? (
-                              <li className="px-2 py-3 text-center text-xs text-muted-foreground">
-                                无
-                              </li>
-                            ) : (
-                              section.items.map((item) => (
-                                <li key={item.id}>
-                                  <button
-                                    type="button"
-                                    onClick={() => handleSearchItemClick(item)}
-                                    className="w-full text-left px-2 py-2 hover:bg-muted/50 transition-colors border-b last:border-b-0 text-sm"
-                                  >
-                                    <div className="font-medium truncate">{item.title}</div>
-                                    {item.subtitle && (
-                                      <div className="text-xs text-muted-foreground truncate">
-                                        {item.subtitle}
-                                      </div>
-                                    )}
-                                  </button>
-                                </li>
-                              ))
-                            )}
+                              <ul className="max-h-[200px] overflow-y-auto overflow-x-hidden overscroll-contain shrink min-h-0 sheet-scroll">
+                                {section.items.length === 0 ? (
+                                  <li className="px-2 py-3 text-center text-xs text-muted-foreground">
+                                    无
+                                  </li>
+                                ) : (
+                                  section.items.map((item) => (
+                                    <li key={item.id}>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleSearchItemClick(item)}
+                                        className="w-full text-left px-2 py-2 hover:bg-muted/50 transition-colors border-b last:border-b-0 text-sm"
+                                      >
+                                        <div className="font-medium truncate">{item.title}</div>
+                                        {item.subtitle && (
+                                          <div className="text-xs text-muted-foreground truncate">
+                                            {item.subtitle}
+                                          </div>
+                                        )}
+                                      </button>
+                                    </li>
+                                  ))
+                                )}
                               </ul>
                             </div>
-                          {/* 每表单独分页：始终显示，便于看出是分栏分页；仅一页时按钮禁用 */}
-                          <div className="flex items-center justify-center gap-1 px-2 py-1.5 border-t bg-muted/30 text-xs shrink-0">
-                            <button
-                              type="button"
-                              disabled={page <= 0}
-                              onClick={() => goSearchPage(type, -1)}
-                              className="p-1 rounded hover:bg-muted disabled:opacity-50 disabled:pointer-events-none"
-                              aria-label={`${label}上一页`}
-                            >
-                              <ChevronLeft className="h-3.5 w-3.5" />
-                            </button>
-                            <span className="text-muted-foreground min-w-[3.5rem] text-center">
-                              {page + 1} / {Math.max(1, Math.ceil(section.total / SEARCH_PAGE_SIZE))}
-                            </span>
-                            <button
-                              type="button"
-                              disabled={section.total === 0 || (page + 1) * SEARCH_PAGE_SIZE >= section.total}
-                              onClick={() => goSearchPage(type, 1)}
-                              className="p-1 rounded hover:bg-muted disabled:opacity-50 disabled:pointer-events-none"
-                              aria-label={`${label}下一页`}
-                            >
-                              <ChevronRight className="h-3.5 w-3.5" />
-                            </button>
-                          </div>
+                            {/* 每表单独分页：始终显示，便于看出是分栏分页；仅一页时按钮禁用 */}
+                            <div className="flex items-center justify-center gap-1 px-2 py-1.5 border-t bg-muted/30 text-xs shrink-0">
+                              <button
+                                type="button"
+                                disabled={page <= 0}
+                                onClick={() => goSearchPage(type, -1)}
+                                className="p-1 rounded hover:bg-muted disabled:opacity-50 disabled:pointer-events-none"
+                                aria-label={`${label}上一页`}
+                              >
+                                <ChevronLeft className="h-3.5 w-3.5" />
+                              </button>
+                              <span className="text-muted-foreground min-w-[3.5rem] text-center">
+                                {page + 1} / {Math.max(1, Math.ceil(section.total / SEARCH_PAGE_SIZE))}
+                              </span>
+                              <button
+                                type="button"
+                                disabled={section.total === 0 || (page + 1) * SEARCH_PAGE_SIZE >= section.total}
+                                onClick={() => goSearchPage(type, 1)}
+                                className="p-1 rounded hover:bg-muted disabled:opacity-50 disabled:pointer-events-none"
+                                aria-label={`${label}下一页`}
+                              >
+                                <ChevronRight className="h-3.5 w-3.5" />
+                              </button>
+                            </div>
                           </div>
                         </div>
                       ))}

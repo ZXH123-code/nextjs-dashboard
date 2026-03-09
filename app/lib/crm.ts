@@ -65,16 +65,44 @@ function buildLeadWhere(auth: CrmAuth, includeDeleted = false) {
 }
 
 // ============ 驾驶舱统计 ============
+/** 驾驶舱统计（含漏斗看板所需：已签约、待签约、商机、本月计划） */
 export async function getCrmCounts(auth: CrmAuth) {
   const leadWhere = buildLeadWhere(auth);
   const base =
     !auth ? emptyWhere : auth.role === "admin" ? {} : salesFilter(auth.userId);
-  const [leadCount, opportunityCount, customerCount] = await Promise.all([
+  const d = new Date();
+  const planMonth = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  const mpWhere: Prisma.crm_monthly_plan_leadWhereInput = {
+    planMonth,
+    ...(auth?.role === "sales" && auth?.userId ? { userId: auth.userId } : {}),
+  };
+  const [
+    leadCount,
+    opportunityCount,
+    customerCount,
+    signedCustomerCount,
+    pendingCustomerCount,
+    monthlyPlanRows,
+  ] = await Promise.all([
     prisma.crm_lead.count({ where: leadWhere }),
     prisma.crm_opportunity.count({ where: base }),
     prisma.crm_customer.count({ where: base }),
+    prisma.crm_customer.count({ where: { ...base, status: "已签约" } }),
+    prisma.crm_customer.count({ where: { ...base, status: "预备签约" } }),
+    prisma.crm_monthly_plan_lead.findMany({
+      where: mpWhere,
+      select: { leadId: true },
+    }),
   ]);
-  return { leadCount, opportunityCount, customerCount };
+  const monthlyPlanCount = new Set(monthlyPlanRows.map((r) => r.leadId)).size;
+  return {
+    leadCount,
+    opportunityCount,
+    customerCount,
+    signedCustomerCount,
+    pendingCustomerCount,
+    monthlyPlanCount,
+  };
 }
 
 /** 驾驶舱图表数据：状态分布、来源分布、近 7 天趋势 */
@@ -205,12 +233,17 @@ export type LeadFilterGroup = {
 
 export type LeadFilter = { groups: LeadFilterGroup[] };
 
+/** 线索管理表支持的排序字段 */
+export const LEADS_SORT_FIELDS = ["customerName", "createdAt", "city", "industry", "status", "leadSource", "contactPerson"] as const;
+
 export type GetLeadsOptions = {
   includeDeleted?: boolean;
   page?: number;
   pageSize?: number;
   /** 筛选条件，来自 URL 解码 */
   filter?: LeadFilter;
+  sortBy?: (typeof LEADS_SORT_FIELDS)[number];
+  sortOrder?: "asc" | "desc";
 };
 
 /** 将单个筛选条件转换为 Prisma where 子句 */
@@ -358,14 +391,20 @@ export async function getLeads(
   auth: CrmAuth,
   options: GetLeadsOptions = {}
 ): Promise<{ items: LeadListItem[]; total: number }> {
-  const { includeDeleted = false, page, pageSize, filter } = options;
+  const { includeDeleted = false, page, pageSize, filter, sortBy, sortOrder } = options;
   const baseWhere = buildLeadWhere(auth, includeDeleted);
   const filterWhere = buildLeadWhereFromFilter(filter);
   const where: Prisma.crm_leadWhereInput = {
     ...baseWhere,
     ...filterWhere,
   };
-  const orderBy = [{ isKeyFocus: "desc" as const }, { createdAt: "desc" as const }];
+  const validSortBy = sortBy && LEADS_SORT_FIELDS.includes(sortBy) ? sortBy : "createdAt";
+  const order = sortOrder === "asc" ? "asc" : "desc";
+  const orderBy: Prisma.crm_leadOrderByWithRelationInput[] = [
+    { isKeyFocus: "desc" as const },
+    { [validSortBy]: order } as Prisma.crm_leadOrderByWithRelationInput,
+    { createdAt: "desc" as const },
+  ];
   const include = {
     assignees: { orderBy: { createdAt: "asc" as const }, include: { user: { select: { id: true, name: true } } } },
     opportunity: {
@@ -407,13 +446,17 @@ export async function getPageForNewLead(
   return Math.max(1, Math.ceil((keyFocusCount + 1) / pageSize));
 }
 
-/** 计算某条线索在当前筛选与排序下位于第几页（用于搜索点击跳转高亮）。若线索不存在或已删除则返回 null */
+/** 计算某条线索在当前筛选与排序下位于第几页（用于搜索点击跳转高亮）。若线索不存在或已删除则返回 null。仅默认排序（createdAt 降序）时支持定位 */
 export async function getPageForLeadId(
   auth: CrmAuth,
   leadId: string,
   filter: LeadFilter | undefined,
-  pageSize: number
+  pageSize: number,
+  sortBy?: (typeof LEADS_SORT_FIELDS)[number],
+  sortOrder?: "asc" | "desc"
 ): Promise<number | null> {
+  if (sortBy !== "createdAt" && sortBy !== undefined) return null;
+  if (sortOrder === "asc") return null;
   const baseWhere = buildLeadWhere(auth, false);
   const filterWhere = buildLeadWhereFromFilter(filter);
   const listWhere: Prisma.crm_leadWhereInput = { ...baseWhere, ...filterWhere };
@@ -432,6 +475,242 @@ export async function getPageForLeadId(
 }
 
 const MAX_LEAD_IDS_FOR_SELECT_ALL = 5000;
+
+// ============ 本月计划 ============
+/** 获取当前月份字符串，如 "2026-03" */
+function getCurrentPlanMonth() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+export type MonthlyPlanLeadItem = LeadListItem & {
+  /** 转化状态：未转化 | 已转商机 | 已转客户 */
+  conversionStatus: "未转化" | "已转商机" | "已转客户";
+  /** 本月是否有任意跟进记录 */
+  hasFollowUpThisMonth: boolean;
+};
+
+export type MonthlyPlanStats = {
+  total: number;
+  contacted: number;
+  opportunityCount: number;
+  customerCount: number;
+};
+
+export type MonthlyPlanStatsByUser = {
+  userId: string;
+  userName: string;
+  total: number;
+  contacted: number;
+  opportunityCount: number;
+  customerCount: number;
+};
+
+/** 本月计划支持的排序字段 */
+export const MONTHLY_PLAN_SORT_FIELDS = ["customerName", "createdAt", "city", "industry", "status", "leadSource"] as const;
+
+/** 获取本月计划线索列表 */
+export async function getMonthlyPlanLeads(
+  auth: CrmAuth,
+  options: {
+    planMonth?: string;
+    userId?: string; // 筛选指定跟进人，admin 用；sales 自动用自己的
+    page?: number;
+    pageSize?: number;
+    filter?: LeadFilter;
+    sortBy?: (typeof MONTHLY_PLAN_SORT_FIELDS)[number];
+    sortOrder?: "asc" | "desc";
+  } = {}
+): Promise<{ items: MonthlyPlanLeadItem[]; total: number }> {
+  const planMonth = options.planMonth ?? getCurrentPlanMonth();
+  const effectiveUserId = options.userId ?? (auth?.role === "admin" ? undefined : auth?.userId);
+  if (!auth) return { items: [], total: 0 };
+
+  const monthStart = new Date(planMonth + "-01");
+  const monthEnd = new Date(monthStart);
+  monthEnd.setMonth(monthEnd.getMonth() + 1);
+
+  const mpWhere: Prisma.crm_monthly_plan_leadWhereInput = {
+    planMonth,
+    ...(effectiveUserId && { userId: effectiveUserId }),
+  };
+
+  const leadIds = await prisma.crm_monthly_plan_lead.findMany({
+    where: mpWhere,
+    select: { leadId: true },
+  });
+  const ids = leadIds.map((r) => r.leadId);
+  if (ids.length === 0) return { items: [], total: 0 };
+
+  const baseWhere: Prisma.crm_leadWhereInput = {
+    id: { in: ids },
+    deletedAt: null,
+  };
+  const filterWhere = buildLeadWhereFromFilter(options.filter);
+  const where: Prisma.crm_leadWhereInput = { ...baseWhere, ...filterWhere };
+
+  const include = {
+    assignees: { orderBy: { createdAt: "asc" as const }, include: { user: { select: { id: true, name: true } } } },
+    opportunity: {
+      select: { id: true, name: true, customer: { select: { id: true, status: true } } },
+    },
+    followUps: {
+      where: { followDate: { gte: monthStart, lt: monthEnd } },
+      select: { id: true },
+    },
+  };
+
+  const validSortBy = options.sortBy && MONTHLY_PLAN_SORT_FIELDS.includes(options.sortBy) ? options.sortBy : "createdAt";
+  const sortOrder = options.sortOrder === "asc" ? "asc" : "desc";
+  const orderBy: Prisma.crm_leadOrderByWithRelationInput[] = [
+    { isKeyFocus: "desc" as const },
+    { [validSortBy]: sortOrder } as Prisma.crm_leadOrderByWithRelationInput,
+    { createdAt: "desc" as const },
+  ];
+
+  const [rows, total] = await Promise.all([
+    prisma.crm_lead.findMany({
+      where,
+      orderBy,
+      include,
+      skip: options.page && options.pageSize ? (options.page - 1) * options.pageSize : 0,
+      take: options.page && options.pageSize ? options.pageSize : 1000,
+    }),
+    prisma.crm_lead.count({ where }),
+  ]);
+
+  const items: MonthlyPlanLeadItem[] = rows.map((r) => {
+    const opp = r.opportunity;
+    const hasCustomer = opp?.customer != null;
+    const hasOpp = opp != null;
+    const conversionStatus: "未转化" | "已转商机" | "已转客户" = hasCustomer
+      ? "已转客户"
+      : hasOpp
+        ? "已转商机"
+        : "未转化";
+    const hasFollowUpThisMonth = (r.followUps?.length ?? 0) > 0;
+    const { followUps, ...rest } = r;
+    return {
+      ...rest,
+      conversionStatus,
+      hasFollowUpThisMonth,
+    } as MonthlyPlanLeadItem;
+  });
+
+  return { items, total };
+}
+
+/** 获取本月计划统计（基于当前筛选） */
+export async function getMonthlyPlanStats(
+  auth: CrmAuth,
+  options: { planMonth?: string; userId?: string } = {}
+): Promise<MonthlyPlanStats> {
+  const planMonth = options.planMonth ?? getCurrentPlanMonth();
+  const effectiveUserId = options.userId ?? (auth?.role === "admin" ? undefined : auth?.userId);
+  if (!auth) return { total: 0, contacted: 0, opportunityCount: 0, customerCount: 0 };
+
+  const mpWhere: Prisma.crm_monthly_plan_leadWhereInput = {
+    planMonth,
+    ...(effectiveUserId && { userId: effectiveUserId }),
+  };
+  const leadIds = await prisma.crm_monthly_plan_lead.findMany({
+    where: mpWhere,
+    select: { leadId: true },
+  });
+  const ids = leadIds.map((r) => r.leadId);
+  if (ids.length === 0) return { total: 0, contacted: 0, opportunityCount: 0, customerCount: 0 };
+
+  const baseWhere: Prisma.crm_leadWhereInput = {
+    id: { in: ids },
+    deletedAt: null,
+  };
+
+  const monthStart = new Date(planMonth + "-01");
+  const monthEnd = new Date(monthStart);
+  monthEnd.setMonth(monthEnd.getMonth() + 1);
+
+  const [total, contactedLeads, withOpp, withCustomer] = await Promise.all([
+    prisma.crm_lead.count({ where: baseWhere }),
+    prisma.crm_lead.count({
+      where: {
+        ...baseWhere,
+        followUps: { some: { followDate: { gte: monthStart, lt: monthEnd } } },
+      },
+    }),
+    prisma.crm_lead.count({
+      where: { ...baseWhere, opportunity: { isNot: null } },
+    }),
+    prisma.crm_lead.count({
+      where: { ...baseWhere, opportunity: { customer: { isNot: null } } },
+    }),
+  ]);
+
+  return {
+    total,
+    contacted: contactedLeads,
+    opportunityCount: withOpp,
+    customerCount: withCustomer,
+  };
+}
+
+/** 获取本月计划按人员汇总统计（仅 admin） */
+export async function getMonthlyPlanStatsByUser(
+  auth: CrmAuth,
+  planMonth?: string
+): Promise<MonthlyPlanStatsByUser[]> {
+  if (!auth || auth.role !== "admin") return [];
+  const month = planMonth ?? getCurrentPlanMonth();
+
+  const entries = await prisma.crm_monthly_plan_lead.findMany({
+    where: { planMonth: month },
+    include: { user: { select: { id: true, name: true } } },
+  });
+
+  const byUser = new Map<string, { user: { id: string; name: string }; leadIds: string[] }>();
+  for (const e of entries) {
+    const u = e.user;
+    if (!byUser.has(u.id)) byUser.set(u.id, { user: u, leadIds: [] });
+    byUser.get(u.id)!.leadIds.push(e.leadId);
+  }
+
+  const result: MonthlyPlanStatsByUser[] = [];
+  for (const [userId, { user, leadIds }] of byUser) {
+    if (leadIds.length === 0) continue;
+    const monthStart = new Date(month + "-01");
+    const monthEnd = new Date(monthStart);
+    monthEnd.setMonth(monthEnd.getMonth() + 1);
+
+    const leads = await prisma.crm_lead.findMany({
+      where: { id: { in: leadIds }, deletedAt: null },
+      include: {
+        followUps: {
+          where: { followDate: { gte: monthStart, lt: monthEnd } },
+          select: { id: true },
+        },
+        opportunity: { select: { id: true, customer: { select: { id: true } } } },
+      },
+    });
+
+    let contacted = 0;
+    let opportunityCount = 0;
+    let customerCount = 0;
+    for (const l of leads) {
+      if ((l.followUps?.length ?? 0) > 0) contacted++;
+      if (l.opportunity?.customer) customerCount++;
+      else if (l.opportunity) opportunityCount++;
+    }
+
+    result.push({
+      userId,
+      userName: user.name,
+      total: leadIds.length,
+      contacted,
+      opportunityCount,
+      customerCount,
+    });
+  }
+  return result.sort((a, b) => b.total - a.total);
+}
 
 /** 按当前筛选条件返回线索 id 列表（用于「全选」），最多返回 MAX_LEAD_IDS_FOR_SELECT_ALL 条 */
 export async function getLeadIds(
@@ -742,7 +1021,16 @@ export async function deleteLeadWithCascade(leadId: string) {
 }
 
 // ============ 商机 ============
-export type GetOpportunitiesOptions = { page?: number; pageSize?: number; leadId?: string };
+/** 商机管理表支持的排序字段 */
+export const OPPORTUNITY_SORT_FIELDS = ["name", "createdAt", "productType", "status", "expectedCloseDate", "amount"] as const;
+
+export type GetOpportunitiesOptions = {
+  page?: number;
+  pageSize?: number;
+  leadId?: string;
+  sortBy?: (typeof OPPORTUNITY_SORT_FIELDS)[number];
+  sortOrder?: "asc" | "desc";
+};
 
 /** getOpportunities 返回的商机项类型（含 lead、customer、salesPerson、deliveryPerson，amount 为 number） */
 export type OpportunityListItem = Omit<
@@ -761,12 +1049,18 @@ export async function getOpportunities(
   auth: CrmAuth,
   options: GetOpportunitiesOptions = {}
 ): Promise<{ items: OpportunityListItem[]; total: number }> {
-  const { page, pageSize, leadId } = options;
+  const { page, pageSize, leadId, sortBy, sortOrder } = options;
   let where = !auth ? emptyWhere : auth.role === "admin" ? {} : salesFilter(auth.userId);
   if (leadId) {
     where = { ...where, leadId };
   }
-  const orderBy = [{ isKeyFocus: "desc" as const }, { createdAt: "desc" as const }];
+  const validSortBy = sortBy && OPPORTUNITY_SORT_FIELDS.includes(sortBy) ? sortBy : "createdAt";
+  const order = sortOrder === "asc" ? "asc" : "desc";
+  const orderBy: Prisma.crm_opportunityOrderByWithRelationInput[] = [
+    { isKeyFocus: "desc" as const },
+    { [validSortBy]: order } as Prisma.crm_opportunityOrderByWithRelationInput,
+    { createdAt: "desc" as const },
+  ];
   const include = {
     lead: { select: { id: true, customerName: true, contactPhone: true } },
     salesPerson: { select: { id: true, name: true } },
@@ -794,13 +1088,17 @@ export async function getOpportunities(
   return { items: mapAmount(rows) as OpportunityListItem[], total: rows.length };
 }
 
-/** 计算某条商机在当前列表（含 leadId 筛选）下位于第几页（用于搜索点击跳转高亮） */
+/** 计算某条商机在当前列表（含 leadId 筛选、排序）下位于第几页。仅默认排序（createdAt 降序）时支持定位 */
 export async function getPageForOpportunityId(
   auth: CrmAuth,
   opportunityId: string,
   pageSize: number,
-  leadId?: string
+  leadId?: string,
+  sortBy?: (typeof OPPORTUNITY_SORT_FIELDS)[number],
+  sortOrder?: "asc" | "desc"
 ): Promise<number> {
+  if (sortBy !== "createdAt" && sortBy !== undefined) return 1;
+  if (sortOrder === "asc") return 1;
   let where: Prisma.crm_opportunityWhereInput = !auth ? emptyWhere : auth.role === "admin" ? {} : salesFilter(auth.userId);
   if (leadId) where = { ...where, leadId };
   const opp = await prisma.crm_opportunity.findFirst({
@@ -899,7 +1197,16 @@ export async function updateOpportunityStatus(id: string, status: string, lostRe
 }
 
 // ============ 客户 ============
-export type GetCustomersOptions = { page?: number; pageSize?: number };
+export type GetCustomersOptions = {
+  page?: number;
+  pageSize?: number;
+  /** 按状态筛选：预备签约 | 已签约 | 流失 */
+  statusFilter?: string;
+  /** 排序字段：signedAt | createdAt | firstMaintenanceDate | name */
+  sortBy?: string;
+  /** 排序方向 */
+  sortOrder?: "asc" | "desc";
+};
 
 /** getCustomers 返回的客户项类型（含 opportunity.lead.customerTier 用于展示客户分层，actualAmount 为 number） */
 export type CustomerListItem = Omit<
@@ -916,9 +1223,21 @@ export async function getCustomers(
   auth: CrmAuth,
   options: GetCustomersOptions = {}
 ): Promise<{ items: CustomerListItem[]; total: number }> {
-  const { page, pageSize } = options;
-  const where = !auth ? emptyWhere : auth.role === "admin" ? {} : salesFilter(auth.userId);
-  const orderBy = [{ isKeyFocus: "desc" as const }, { createdAt: "desc" as const }];
+  const { page, pageSize, statusFilter, sortBy = "createdAt", sortOrder = "desc" } = options;
+  const baseWhere = !auth ? emptyWhere : auth.role === "admin" ? {} : salesFilter(auth.userId);
+  const where = statusFilter
+    ? { ...baseWhere, status: statusFilter }
+    : baseWhere;
+
+  const sortField = sortBy === "signedAt" || sortBy === "createdAt" || sortBy === "firstMaintenanceDate" || sortBy === "name"
+    ? sortBy
+    : "createdAt";
+  const secondOrder =
+    sortField === "signedAt" ? { signedAt: sortOrder } :
+      sortField === "firstMaintenanceDate" ? { firstMaintenanceDate: sortOrder } :
+        sortField === "name" ? { name: sortOrder } :
+          { createdAt: sortOrder };
+  const orderBy = [{ isKeyFocus: "desc" as const }, secondOrder];
   const include = {
     opportunity: {
       select: {
@@ -954,9 +1273,11 @@ export async function getCustomers(
 export async function getPageForCustomerId(
   auth: CrmAuth,
   customerId: string,
-  pageSize: number
+  pageSize: number,
+  options?: { statusFilter?: string }
 ): Promise<number> {
-  const where: Prisma.crm_customerWhereInput = !auth ? emptyWhere : auth.role === "admin" ? {} : salesFilter(auth.userId);
+  const baseWhere: Prisma.crm_customerWhereInput = !auth ? emptyWhere : auth.role === "admin" ? {} : salesFilter(auth.userId);
+  const where = options?.statusFilter ? { ...baseWhere, status: options.statusFilter } : baseWhere;
   const customer = await prisma.crm_customer.findFirst({
     where: { id: customerId, ...where },
     select: { isKeyFocus: true, createdAt: true },
@@ -983,6 +1304,7 @@ export async function updateCustomer(
     tags?: string;
     mainProducts?: string;
     actualAmount?: number | null;
+    signedAt?: Date | null;
     contactPhone?: string;
     salesPersonId?: string | null;
   }
@@ -999,6 +1321,7 @@ export async function updateCustomer(
       tags: data.tags,
       mainProducts: data.mainProducts,
       actualAmount: data.actualAmount,
+      ...(data.signedAt !== undefined && { signedAt: data.signedAt }),
       ...(data.contactPhone !== undefined && { contactPhone: data.contactPhone }),
       ...(data.salesPersonId !== undefined && { salesPersonId: data.salesPersonId }),
     },
@@ -1418,6 +1741,7 @@ export async function opportunityToCustomer(opportunityId: string) {
   const contactPhone = opp.contactPhone ?? lead?.contactPhone ?? null;
 
   const oppRow = opp as { isKeyFocus?: boolean; keyFocusByAdmin?: boolean };
+  const isSigned = opp.status === "已赢单";
   const customer = await prisma.crm_customer.create({
     data: {
       name: lead?.customerName ?? opp.name,
@@ -1426,7 +1750,8 @@ export async function opportunityToCustomer(opportunityId: string) {
       industry: lead?.industry ?? null,
       opportunityId: opp.id,
       salesPersonId: opp.salesPersonId,
-      status: opp.status === "已赢单" ? "已签约" : "预备签约",
+      status: isSigned ? "已签约" : "预备签约",
+      signedAt: isSigned ? new Date() : null,
       contactPhone,
       isKeyFocus: oppRow.isKeyFocus ?? false,
       keyFocusByAdmin: oppRow.keyFocusByAdmin ?? false,
@@ -1570,19 +1895,26 @@ export async function getNotificationsForUser(auth: CrmAuth, limit = 50) {
   });
 }
 
-/** 全局搜索：线索、商机、客户（遵守 CRM 权限），分栏展示，每表单独分页 */
+/** 全局搜索：线索、商机、客户、待签约、本月计划、跟进（遵守 CRM 权限），分栏展示，每表单独分页 */
 export type GlobalSearchItem = {
-  type: "lead" | "opportunity" | "customer";
+  type: "lead" | "opportunity" | "customer" | "pendingCustomer" | "monthlyPlan" | "followUp";
   id: string;
   title: string;
   subtitle?: string;
   createdAt: Date;
+  /** 跟进记录点击跳转时用于筛选（leadId/customerId/opportunityId 取其一） */
+  leadId?: string;
+  customerId?: string;
+  opportunityId?: string;
 };
 
 export type GlobalSearchResult = {
   leads: { items: GlobalSearchItem[]; total: number };
   opportunities: { items: GlobalSearchItem[]; total: number };
   customers: { items: GlobalSearchItem[]; total: number };
+  pendingCustomers: { items: GlobalSearchItem[]; total: number };
+  monthlyPlans: { items: GlobalSearchItem[]; total: number };
+  followUps: { items: GlobalSearchItem[]; total: number };
 };
 
 const SEARCH_PAGE_SIZE = 5;
@@ -1592,16 +1924,28 @@ export async function globalSearchCrm(
   keyword: string,
   leadPage: number,
   oppPage: number,
-  customerPage: number
+  customerPage: number,
+  pendingCustomerPage: number,
+  monthlyPlanPage: number,
+  followUpPage: number
 ): Promise<GlobalSearchResult> {
   const k = keyword?.trim();
   const empty = { items: [] as GlobalSearchItem[], total: 0 };
   if (!auth || !k) {
-    return { leads: empty, opportunities: empty, customers: empty };
+    return {
+      leads: empty,
+      opportunities: empty,
+      customers: empty,
+      pendingCustomers: empty,
+      monthlyPlans: empty,
+      followUps: empty,
+    };
   }
 
   const baseWhere = auth.role === "admin" ? {} : salesFilter(auth.userId);
   const leadBase = buildLeadWhere(auth);
+  const planMonth = getCurrentPlanMonth();
+
   const orLead = [
     { customerName: { contains: k, mode: "insensitive" as const } },
     { nickname: { contains: k, mode: "insensitive" as const } },
@@ -1635,11 +1979,65 @@ export async function globalSearchCrm(
   const leadWhere = { ...leadBase, OR: orLead };
   const oppWhere = { ...baseWhere, OR: orOpp };
   const customerWhere = { ...baseWhere, OR: orCustomer };
+  const pendingCustomerWhere = { ...baseWhere, status: "预备签约" as const, OR: orCustomer };
 
-  const [leadsCount, oppsCount, customersCount, leads, opportunities, customers] = await Promise.all([
+  const mpBaseWhere: Prisma.crm_monthly_plan_leadWhereInput = {
+    planMonth,
+    ...(auth.role === "sales" && auth.userId ? { userId: auth.userId } : {}),
+  };
+  const mpLeadWhere = { ...leadBase, OR: orLead };
+  const monthlyPlanWhere = {
+    ...mpBaseWhere,
+    lead: mpLeadWhere,
+  };
+
+  const followUpAuthWhere: Prisma.crm_follow_upWhereInput =
+    auth.role === "sales" && auth.userId
+      ? {
+          OR: [
+            { followUpById: auth.userId },
+            { lead: { assignees: { some: { userId: auth.userId } } } },
+            { customer: { salesPersonId: auth.userId } },
+            { opportunity: { salesPersonId: auth.userId } },
+          ],
+        }
+      : {};
+  const orFollowUp = [
+    { content: { contains: k, mode: "insensitive" as const } },
+    { summary: { contains: k, mode: "insensitive" as const } },
+    { nextStep: { contains: k, mode: "insensitive" as const } },
+    { customerNeeds: { contains: k, mode: "insensitive" as const } },
+    { contactPerson: { contains: k, mode: "insensitive" as const } },
+    { status: { contains: k, mode: "insensitive" as const } },
+    { lead: { customerName: { contains: k, mode: "insensitive" as const } } },
+    { customer: { name: { contains: k, mode: "insensitive" as const } } },
+    { opportunity: { name: { contains: k, mode: "insensitive" as const } } },
+  ];
+  const followUpWhere: Prisma.crm_follow_upWhereInput =
+    Object.keys(followUpAuthWhere).length > 0
+      ? { AND: [followUpAuthWhere, { OR: orFollowUp }] }
+      : { OR: orFollowUp };
+
+  const [
+    leadsCount,
+    oppsCount,
+    customersCount,
+    pendingCustomersCount,
+    monthlyPlansCount,
+    followUpsCount,
+    leads,
+    opportunities,
+    customers,
+    pendingCustomers,
+    monthlyPlanEntries,
+    followUps,
+  ] = await Promise.all([
     prisma.crm_lead.count({ where: leadWhere }),
     prisma.crm_opportunity.count({ where: oppWhere }),
     prisma.crm_customer.count({ where: customerWhere }),
+    prisma.crm_customer.count({ where: pendingCustomerWhere }),
+    prisma.crm_monthly_plan_lead.count({ where: monthlyPlanWhere }),
+    prisma.crm_follow_up.count({ where: followUpWhere }),
     prisma.crm_lead.findMany({
       where: leadWhere,
       orderBy: { createdAt: "desc" },
@@ -1660,6 +2058,42 @@ export async function globalSearchCrm(
       skip: customerPage * SEARCH_PAGE_SIZE,
       take: SEARCH_PAGE_SIZE,
       select: { id: true, name: true, contactPhone: true, createdAt: true },
+    }),
+    prisma.crm_customer.findMany({
+      where: pendingCustomerWhere,
+      orderBy: { createdAt: "desc" },
+      skip: pendingCustomerPage * SEARCH_PAGE_SIZE,
+      take: SEARCH_PAGE_SIZE,
+      select: { id: true, name: true, contactPhone: true, createdAt: true },
+    }),
+    prisma.crm_monthly_plan_lead.findMany({
+      where: monthlyPlanWhere,
+      orderBy: { createdAt: "desc" },
+      skip: monthlyPlanPage * SEARCH_PAGE_SIZE,
+      take: SEARCH_PAGE_SIZE,
+      select: {
+        id: true,
+        leadId: true,
+        lead: { select: { customerName: true, contactPhone: true, createdAt: true } },
+      },
+    }),
+    prisma.crm_follow_up.findMany({
+      where: followUpWhere,
+      orderBy: { followDate: "desc" },
+      skip: followUpPage * SEARCH_PAGE_SIZE,
+      take: SEARCH_PAGE_SIZE,
+      select: {
+        id: true,
+        summary: true,
+        content: true,
+        followDate: true,
+        leadId: true,
+        customerId: true,
+        opportunityId: true,
+        lead: { select: { customerName: true } },
+        customer: { select: { name: true } },
+        opportunity: { select: { name: true } },
+      },
     }),
   ]);
 
@@ -1684,10 +2118,40 @@ export async function globalSearchCrm(
     subtitle: c.contactPhone ?? undefined,
     createdAt: c.createdAt,
   }));
+  const pendingCustomerItems: GlobalSearchItem[] = pendingCustomers.map((c) => ({
+    type: "pendingCustomer",
+    id: c.id,
+    title: c.name,
+    subtitle: c.contactPhone ?? undefined,
+    createdAt: c.createdAt,
+  }));
+  const monthlyPlanItems: GlobalSearchItem[] = monthlyPlanEntries.map((e) => ({
+    type: "monthlyPlan",
+    id: e.leadId,
+    title: e.lead.customerName,
+    subtitle: e.lead.contactPhone ?? undefined,
+    createdAt: e.lead.createdAt,
+  }));
+  const followUpItems: GlobalSearchItem[] = followUps.map((f) => {
+    const ctx = f.lead?.customerName ?? f.customer?.name ?? f.opportunity?.name ?? "-";
+    return {
+      type: "followUp" as const,
+      id: f.id,
+      title: (f.summary ?? f.content.slice(0, 50)) + (f.content.length > 50 ? "…" : ""),
+      subtitle: ctx,
+      createdAt: f.followDate,
+      leadId: f.leadId ?? undefined,
+      customerId: f.customerId ?? undefined,
+      opportunityId: f.opportunityId ?? undefined,
+    };
+  });
 
   return {
     leads: { items: leadItems, total: leadsCount },
     opportunities: { items: oppItems, total: oppsCount },
     customers: { items: customerItems, total: customersCount },
+    pendingCustomers: { items: pendingCustomerItems, total: pendingCustomersCount },
+    monthlyPlans: { items: monthlyPlanItems, total: monthlyPlansCount },
+    followUps: { items: followUpItems, total: followUpsCount },
   };
 }

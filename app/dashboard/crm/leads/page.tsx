@@ -1,6 +1,6 @@
 import { Suspense } from "react";
 import { redirect } from "next/navigation";
-import { getLeads, getCrmAuth, getUsers, getPageForLeadId } from "@/app/lib/crm";
+import { getLeads, getCrmAuth, getUsers, getPageForLeadId, LEADS_SORT_FIELDS } from "@/app/lib/crm";
 import type { LeadFilter } from "@/app/lib/crm";
 import { LeadsTableWithBulk } from "./LeadsTableWithBulk";
 import { LeadsPageActions } from "./LeadsPageActions";
@@ -8,7 +8,7 @@ import { LeadsTableSkeleton } from "./LeadsTableSkeleton";
 import { Pagination } from "@/components/ui/pagination";
 import { lusitana } from "@/app/ui/fonts";
 
-type SearchParams = { highlight?: string; page?: string; pageSize?: string; filter?: string };
+type SearchParams = { highlight?: string; page?: string; pageSize?: string; filter?: string; sortBy?: string; sortOrder?: string };
 
 function decodeFilter(filterStr: string | undefined): LeadFilter | undefined {
   if (!filterStr?.trim()) return undefined;
@@ -30,8 +30,12 @@ async function LeadsContent({
   auth: Awaited<ReturnType<typeof getCrmAuth>>;
 }) {
   const page = Math.max(1, parseInt(params.page ?? "1", 10) || 1);
-  const pageSize = Math.max(1, Math.min(100, parseInt(params.pageSize ?? "20", 10) || 20));
+  const pageSize = Math.max(1, Math.min(400, parseInt(params.pageSize ?? "20", 10) || 20));
   const filter = decodeFilter(params.filter);
+  const sortBy = params.sortBy && LEADS_SORT_FIELDS.includes(params.sortBy as (typeof LEADS_SORT_FIELDS)[number])
+    ? (params.sortBy as (typeof LEADS_SORT_FIELDS)[number])
+    : "createdAt";
+  const sortOrder = params.sortOrder === "asc" ? "asc" : "desc";
 
   let leads: Awaited<ReturnType<typeof getLeads>>["items"] = [];
   let total = 0;
@@ -39,7 +43,7 @@ async function LeadsContent({
 
   try {
     const [leadsRes, usersList] = await Promise.all([
-      getLeads(auth, { page, pageSize, filter }),
+      getLeads(auth, { page, pageSize, filter, sortBy, sortOrder }),
       getUsers(),
     ]);
     leads = leadsRes.items.map((item) => ({
@@ -69,6 +73,8 @@ async function LeadsContent({
         pageSize={pageSize}
         initialFilter={filter}
         filterParam={params.filter}
+        sortBy={sortBy}
+        sortOrder={sortOrder}
       />
       <Pagination
         basePath="/dashboard/crm/leads"
@@ -76,7 +82,7 @@ async function LeadsContent({
         totalPages={totalPages}
         total={total}
         pageSize={pageSize}
-        preserveParams={{ highlight: params.highlight, filter: params.filter }}
+        preserveParams={{ highlight: params.highlight, filter: params.filter, sortBy, sortOrder }}
         showPageSizeSelector
       />
     </>
@@ -92,43 +98,53 @@ export default async function LeadsPage({
   const auth = await getCrmAuth();
   const isAdmin = auth?.role === "admin";
   const page = Math.max(1, parseInt(params.page ?? "1", 10) || 1);
-  const pageSize = Math.max(1, Math.min(100, parseInt(params.pageSize ?? "20", 10) || 20));
+  const pageSize = Math.max(1, Math.min(400, parseInt(params.pageSize ?? "20", 10) || 20));
   const filter = decodeFilter(params.filter);
+  const sortBy = params.sortBy && LEADS_SORT_FIELDS.includes(params.sortBy as (typeof LEADS_SORT_FIELDS)[number])
+    ? (params.sortBy as (typeof LEADS_SORT_FIELDS)[number])
+    : "createdAt";
+  const sortOrder = params.sortOrder === "asc" ? "asc" : "desc";
 
-  // 搜索点击跳转：若高亮记录不在当前页，先重定向到所在页；若高亮记录已删除则清除 highlight 避免无法翻页
+  const appendPreserveParams = (q: URLSearchParams) => {
+    if (params.filter) q.set("filter", params.filter);
+    if (sortBy !== "createdAt" || sortOrder !== "desc") {
+      q.set("sortBy", sortBy);
+      q.set("sortOrder", sortOrder);
+    }
+  };
+
+  // 搜索点击跳转：若高亮记录不在当前页，先重定向到所在页；若高亮记录已删除则清除 highlight 避免无法翻页。仅默认排序时支持定位
   if (params.highlight?.trim()) {
-    const targetPage = await getPageForLeadId(auth, params.highlight, filter, pageSize);
+    const targetPage = await getPageForLeadId(auth, params.highlight, filter, pageSize, sortBy, sortOrder);
     if (targetPage === null) {
-      // 线索已删除或不存在，清除 highlight 避免每次翻页都被重定向回第 1 页
+      // 线索已删除或不存在，或非默认排序无法定位，清除 highlight
       const q = new URLSearchParams();
       q.set("page", String(page));
       q.set("pageSize", String(pageSize));
-      if (params.filter) q.set("filter", params.filter);
+      appendPreserveParams(q);
       redirect(`/dashboard/crm/leads?${q.toString()}`);
     }
     if (targetPage !== page) {
-      // URL 中有 page 参数说明用户通过分页链接请求了某页，优先尊重用户选择并清除 highlight，避免卡在错误页
       const hasExplicitPage = params.page != null && params.page !== "";
       if (hasExplicitPage) {
         const q = new URLSearchParams();
         q.set("page", String(page));
         q.set("pageSize", String(pageSize));
-        if (params.filter) q.set("filter", params.filter);
+        appendPreserveParams(q);
         redirect(`/dashboard/crm/leads?${q.toString()}`);
       }
-      // 来自搜索点击（无 page 参数），重定向到目标页；先验证记录是否在目标页，避免计算错误导致卡住
-      const leadsRes = await getLeads(auth, { page: targetPage, pageSize, filter });
+      const leadsRes = await getLeads(auth, { page: targetPage, pageSize, filter, sortBy, sortOrder });
       const leadInPage = leadsRes.items.some((l) => l.id === params.highlight);
       const q = new URLSearchParams();
       q.set("page", String(targetPage));
       q.set("pageSize", String(pageSize));
-      if (params.filter) q.set("filter", params.filter);
+      appendPreserveParams(q);
       if (leadInPage) q.set("highlight", params.highlight);
       redirect(`/dashboard/crm/leads?${q.toString()}`);
     }
   }
 
-  const suspenseKey = `${params.page ?? "1"}-${params.pageSize ?? "20"}-${params.filter ?? ""}`;
+  const suspenseKey = `${params.page ?? "1"}-${params.pageSize ?? "20"}-${params.filter ?? ""}-${params.sortBy ?? ""}-${params.sortOrder ?? ""}`;
 
   return (
     <main className="p-6 md:p-8">

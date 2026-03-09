@@ -2,7 +2,7 @@
 
 import { useState, useEffect, Fragment } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { useAlert } from "@/hooks/use-alert";
 import { useFilter } from "@/hooks/use-filter";
 import { FilterDialog, type FilterField } from "@/components/ui/filter-dialog";
@@ -21,6 +21,13 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -34,7 +41,8 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
-import { ChevronDown, MessageSquarePlus, User, ExternalLink, Filter, MoreHorizontal, X, Check, UserRound, Building2, Star, FileText } from "lucide-react";
+import { SheetScrollArea } from "@/components/ui/sheet-scroll-area";
+import { ChevronDown, ChevronUp, MessageSquarePlus, User, ExternalLink, Filter, MoreHorizontal, X, Check, UserRound, Building2, Star, FileText, ArrowUpDown } from "lucide-react";
 import { OPPORTUNITY_STATUS } from "@/app/lib/crm-constants";
 import { cn } from "@/lib/utils";
 
@@ -73,14 +81,20 @@ export function OpportunitiesTable({
   currentUserId,
   users = [],
   highlightId,
+  sortBy,
+  sortOrder,
 }: {
   opportunities: Opportunity[];
   currentUserRole?: string;
   currentUserId?: string;
   users?: User[];
   highlightId?: string;
+  sortBy?: string;
+  sortOrder?: string;
 }) {
   const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const { showAlert, AlertComponent } = useAlert();
   const [expandedOppIds, setExpandedOppIds] = useState<Set<string>>(new Set());
   const [writeFollowUpOppId, setWriteFollowUpOppId] = useState<string | null>(null);
@@ -164,6 +178,26 @@ export function OpportunitiesTable({
   const toggleSelectAll = () => {
     if (allFilteredSelected) setSelectedIds(new Set());
     else setSelectedIds(new Set(filteredData.map((o) => o.id)));
+  };
+
+  const buildUrl = (updates: { page?: number; sortBy?: string; sortOrder?: string }) => {
+    const params = new URLSearchParams(searchParams.toString());
+    if (updates.page != null) params.set("page", String(updates.page));
+    if (updates.sortBy !== undefined) {
+      if (updates.sortBy) params.set("sortBy", updates.sortBy);
+      else params.delete("sortBy");
+    }
+    if (updates.sortOrder !== undefined) {
+      if (updates.sortOrder) params.set("sortOrder", updates.sortOrder);
+      else params.delete("sortOrder");
+    }
+    const qs = params.toString();
+    return qs ? `${pathname}?${qs}` : pathname;
+  };
+
+  const handleSortChange = (value: string) => {
+    const [by, order] = value.split("-") as [string, string];
+    router.replace(buildUrl({ page: 1, sortBy: by, sortOrder: order }), { scroll: false });
   };
 
   useEffect(() => {
@@ -507,6 +541,31 @@ export function OpportunitiesTable({
               清除筛选
             </Button>
           )}
+          {sortBy != null && sortOrder != null && (
+            <Select
+              value={`${sortBy}-${sortOrder}`}
+              onValueChange={handleSortChange}
+            >
+              <SelectTrigger className="h-8 min-w-[220px] gap-2">
+                <ArrowUpDown className="h-4 w-4 shrink-0" />
+                <SelectValue placeholder="排序" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="createdAt-desc">默认（创建时间新→旧）</SelectItem>
+                <SelectItem value="name-asc">商机名称 A→Z</SelectItem>
+                <SelectItem value="name-desc">商机名称 Z→A</SelectItem>
+                <SelectItem value="createdAt-asc">创建时间 旧→新</SelectItem>
+                <SelectItem value="productType-asc">产品类型 A→Z</SelectItem>
+                <SelectItem value="productType-desc">产品类型 Z→A</SelectItem>
+                <SelectItem value="status-asc">状态 A→Z</SelectItem>
+                <SelectItem value="status-desc">状态 Z→A</SelectItem>
+                <SelectItem value="expectedCloseDate-desc">预计赢单日期 新→旧</SelectItem>
+                <SelectItem value="expectedCloseDate-asc">预计赢单日期 旧→新</SelectItem>
+                <SelectItem value="amount-desc">金额 高→低</SelectItem>
+                <SelectItem value="amount-asc">金额 低→高</SelectItem>
+              </SelectContent>
+            </Select>
+          )}
         </div>
         <div className="text-sm text-muted-foreground">
           共 {filteredData.length} 条数据
@@ -767,9 +826,20 @@ export function OpportunitiesTable({
                     <tr>
                       <td colSpan={12} className="bg-gray-50 px-4 py-4 !text-left">
                         <div className="rounded-lg border border-gray-200 bg-white p-4 text-left">
-                          <h4 className="mb-3 font-semibold text-gray-900 text-left">
-                            跟进时间线
-                          </h4>
+                          <div className="mb-3 flex items-center justify-between">
+                            <h4 className="font-semibold text-gray-900 text-left">
+                              跟进时间线
+                            </h4>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-8 gap-1.5 text-muted-foreground hover:text-foreground"
+                              onClick={() => toggleExpandedOpp(opp.id)}
+                            >
+                              <ChevronUp className="h-4 w-4" />
+                              收起
+                            </Button>
+                          </div>
                           <FollowUpTimeline
                             opportunityId={opp.id}
                             currentUserRole={currentUserRole}
@@ -798,7 +868,7 @@ export function OpportunitiesTable({
                 <SheetHeader className="shrink-0 border-b pb-3 text-left">
                   <SheetTitle>商机详情 · {opp.name}</SheetTitle>
                 </SheetHeader>
-                <div className="mt-4 flex-1 overflow-y-auto space-y-4 text-left sheet-scroll">
+                <SheetScrollArea>
                   <div className="space-y-1.5 text-left">
                     <div className="text-xs font-medium text-muted-foreground">商机名称</div>
                     {/* 输入框最大宽度：改此处的 max-w-sm 即可，如 max-w-md / max-w-lg */}
@@ -953,7 +1023,16 @@ export function OpportunitiesTable({
                       )}
                     </div>
                   </div>
-                </div>
+
+                  <div className="mt-6 pt-4 border-t">
+                    <h4 className="mb-3 text-sm font-semibold text-foreground">跟进时间线</h4>
+                    <FollowUpTimeline
+                      opportunityId={opp.id}
+                      currentUserRole={currentUserRole}
+                      currentUserId={currentUserId}
+                    />
+                  </div>
+                </SheetScrollArea>
               </>
             );
           })()}

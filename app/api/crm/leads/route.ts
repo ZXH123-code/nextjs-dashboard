@@ -12,7 +12,7 @@ export async function GET(req: NextRequest) {
     const { searchParams } = new URL(req.url);
     const all = searchParams.get("all") === "1";
     const page = Math.max(1, parseInt(searchParams.get("page") ?? "1", 10) || 1);
-    const pageSize = Math.max(1, Math.min(100, parseInt(searchParams.get("pageSize") ?? "20", 10) || 20));
+    const pageSize = Math.max(1, Math.min(400, parseInt(searchParams.get("pageSize") ?? "20", 10) || 20));
 
     const result = all
       ? await getLeads(auth)

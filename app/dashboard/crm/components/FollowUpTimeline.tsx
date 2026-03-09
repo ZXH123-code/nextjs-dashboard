@@ -265,13 +265,13 @@ export function FollowUpTimeline({
                   prev.map((f) =>
                     f.id === editingFollowUpId
                       ? {
-                          ...f,
-                          content: editForm.content,
-                          contactPerson: editForm.contactPerson || null,
-                          summary: editForm.summary || null,
-                          nextStep: editForm.nextStep || null,
-                          customerNeeds: editForm.customerNeeds || null,
-                        }
+                        ...f,
+                        content: editForm.content,
+                        contactPerson: editForm.contactPerson || null,
+                        summary: editForm.summary || null,
+                        nextStep: editForm.nextStep || null,
+                        customerNeeds: editForm.customerNeeds || null,
+                      }
                       : f
                   )
                 );
@@ -412,10 +412,10 @@ export function FollowUpTimeline({
 
             {/* 图片：按需加载 + 补上传 */}
             {(imageCount(followUp) > 0 ||
-              imagesByFollowUpId[followUp.id]?.length ||
+              (imagesByFollowUpId[followUp.id]?.length ?? 0) > 0 ||
               canUploadOrDelete(followUp)) && (
                 <div className="mt-2 flex flex-wrap items-center gap-2 border-t pt-2 text-xs">
-                  {(imageCount(followUp) > 0 || imagesByFollowUpId[followUp.id]?.length) && (
+                  {(imageCount(followUp) > 0 || (imagesByFollowUpId[followUp.id]?.length ?? 0) > 0) && (
                     <button
                       type="button"
                       className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-800"

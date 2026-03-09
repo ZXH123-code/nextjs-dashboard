@@ -53,6 +53,8 @@ import {
   X,
   FileText,
   Star,
+  CalendarDays,
+  ArrowUpDown,
 } from "lucide-react";
 import { LoadingSpinner } from "@/app/ui/loading-spinner";
 import {
@@ -61,9 +63,10 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
+import { SheetScrollArea } from "@/components/ui/sheet-scroll-area";
 import { FollowUpTimeline } from "../components/FollowUpTimeline";
 import { WriteFollowUpDialog } from "../components/WriteFollowUpDialog";
-import { createManualFollowUpAction, updateLeadAction, softDeleteLeadAction, syncLeadNameToCustomerAction, syncLeadContactPhoneToCustomerAction, syncLeadContactPhoneToOpportunityAction, batchUpdateLeadSalesPersonWithFollowUpAction, toggleLeadKeyFocusAction, batchSetLeadKeyFocusAction, batchSoftDeleteLeadsAction, getLeadIdsAction } from "@/app/lib/crm-actions";
+import { createManualFollowUpAction, updateLeadAction, softDeleteLeadAction, syncLeadNameToCustomerAction, syncLeadContactPhoneToCustomerAction, syncLeadContactPhoneToOpportunityAction, batchUpdateLeadSalesPersonWithFollowUpAction, toggleLeadKeyFocusAction, batchSetLeadKeyFocusAction, batchSoftDeleteLeadsAction, getLeadIdsAction, addLeadsToMonthlyPlanAction } from "@/app/lib/crm-actions";
 import { LEAD_STATUS } from "@/app/lib/crm-constants";
 
 type Lead = {
@@ -133,6 +136,8 @@ export function LeadsTableWithBulk({
   pageSize,
   initialFilter,
   filterParam,
+  sortBy,
+  sortOrder,
 }: {
   leads: Lead[];
   users: User[];
@@ -150,6 +155,8 @@ export function LeadsTableWithBulk({
   initialFilter?: LeadFilter;
   /** 原始 filter 参数字符串（用于 preserveParams） */
   filterParam?: string;
+  sortBy?: string;
+  sortOrder?: string;
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -197,6 +204,11 @@ export function LeadsTableWithBulk({
   const [batchAssignSupplement, setBatchAssignSupplement] = useState("");
   const [batchAssignLoading, setBatchAssignLoading] = useState(false);
   const [batchAssignError, setBatchAssignError] = useState("");
+  /** 分配至本月计划对话框 */
+  const [monthlyPlanOpen, setMonthlyPlanOpen] = useState(false);
+  const [monthlyPlanUserIds, setMonthlyPlanUserIds] = useState<Set<string>>(new Set());
+  const [monthlyPlanLoading, setMonthlyPlanLoading] = useState(false);
+  const [monthlyPlanError, setMonthlyPlanError] = useState("");
 
   // 定义筛选字段 - 包含线索表的所有有意义的字段
   const filterFields: FilterField[] = [
@@ -235,13 +247,21 @@ export function LeadsTableWithBulk({
     totalFiltered === 0 ? 0 : (currentPage - 1) * currentPageSize + 1;
   const endItem = Math.min(currentPage * currentPageSize, totalFiltered);
 
-  const buildUrl = (updates: { page?: number; pageSize?: number; filter?: string }) => {
+  const buildUrl = (updates: { page?: number; pageSize?: number; filter?: string; sortBy?: string; sortOrder?: string }) => {
     const params = new URLSearchParams(searchParams.toString());
     if (updates.page != null) params.set("page", String(updates.page));
     if (updates.pageSize != null) params.set("pageSize", String(updates.pageSize));
     if (updates.filter !== undefined) {
       if (updates.filter) params.set("filter", updates.filter);
       else params.delete("filter");
+    }
+    if (updates.sortBy !== undefined) {
+      if (updates.sortBy) params.set("sortBy", updates.sortBy);
+      else params.delete("sortBy");
+    }
+    if (updates.sortOrder !== undefined) {
+      if (updates.sortOrder) params.set("sortOrder", updates.sortOrder);
+      else params.delete("sortOrder");
     }
     const qs = params.toString();
     return qs ? `${pathname}?${qs}` : pathname;
@@ -250,11 +270,16 @@ export function LeadsTableWithBulk({
   const handleApplyFilter = (newConditions: FilterCondition[], newGroups?: FilterGroup[]) => {
     const gs = newGroups?.filter((g) => g.conditions?.length) ?? [];
     const filterStr = gs.length > 0 ? encodeURIComponent(JSON.stringify({ groups: gs })) : "";
-    router.replace(buildUrl({ page: 1, filter: filterStr }));
+    router.replace(buildUrl({ page: 1, filter: filterStr }), { scroll: false });
   };
 
   const handleClearFilter = () => {
-    router.replace(buildUrl({ page: 1, filter: "" }));
+    router.replace(buildUrl({ page: 1, filter: "" }), { scroll: false });
+  };
+
+  const handleSortChange = (value: string) => {
+    const [by, order] = value.split("-") as [string, string];
+    router.replace(buildUrl({ page: 1, sortBy: by, sortOrder: order }), { scroll: false });
   };
 
   // 当前页/筛选结果的所有 id（全选仅作用于当前页）
@@ -355,6 +380,46 @@ export function LeadsTableWithBulk({
     setBatchAssignSupplement("");
     setBatchAssignSalesPersonId("");
     setBatchAssignOpen(true);
+  };
+
+  // 分配至本月计划：打开对话框
+  const openMonthlyPlanDialog = () => {
+    setContextMenuAt(null);
+    if (!isAdmin) {
+      showAlert("仅管理员可分配至本月计划。", { type: "error", title: "无权限" });
+      return;
+    }
+    setMonthlyPlanError("");
+    setMonthlyPlanUserIds(new Set());
+    setMonthlyPlanOpen(true);
+  };
+
+  const handleMonthlyPlanSubmit = async () => {
+    if (monthlyPlanUserIds.size === 0) {
+      setMonthlyPlanError("请至少选择一位跟进人");
+      return;
+    }
+    setMonthlyPlanError("");
+    setMonthlyPlanLoading(true);
+    try {
+      const result = await addLeadsToMonthlyPlanAction(
+        Array.from(selectedIds),
+        Array.from(monthlyPlanUserIds)
+      );
+      if (result && "error" in result && result.error) {
+        setMonthlyPlanError(result.error);
+      } else {
+        setMonthlyPlanOpen(false);
+        clearSelection();
+        doRefresh();
+        showAlert(`已将 ${(result as { count: number }).count} 条线索加入本月计划`, {
+          type: "success",
+          title: "已分配",
+        });
+      }
+    } finally {
+      setMonthlyPlanLoading(false);
+    }
   };
 
   // 批量指定：提交（跟进说明 = 自动生成的默认说明 + 用户补充）
@@ -745,7 +810,7 @@ export function LeadsTableWithBulk({
           if (e.key === "Enter") saveLeadEdit();
           if (e.key === "Escape") cancelEdit();
         },
-        className: "h-8 border-primary text-left",
+        className: cn("h-8 border-primary", (field === "contactPerson" || field === "city" || field === "industry" || field === "contactPhone") ? "text-center" : "text-left"),
         disabled: savingFields.has(`${lead.id}:${field}`),
       };
       return <Input {...commonInputProps} />;
@@ -775,7 +840,7 @@ export function LeadsTableWithBulk({
             className={cn(
               "inline-block w-full min-w-0 truncate whitespace-nowrap align-middle",
               getFieldTextMaxWidthClass(field),
-              (field === "contactPerson" || field === "city") && "text-center"
+              (field === "contactPerson" || field === "city" || field === "industry" || field === "contactPhone") && "text-center"
             )}
             title={displayValue}
           >
@@ -866,6 +931,33 @@ export function LeadsTableWithBulk({
               清除筛选
             </Button>
           )}
+          {sortBy != null && sortOrder != null && (
+            <Select
+              value={`${sortBy}-${sortOrder}`}
+              onValueChange={handleSortChange}
+            >
+              <SelectTrigger className="h-8 min-w-[220px] gap-2">
+                <ArrowUpDown className="h-4 w-4 shrink-0" />
+                <SelectValue placeholder="排序" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="createdAt-desc">默认（创建时间新→旧）</SelectItem>
+                <SelectItem value="customerName-asc">客户名称 A→Z</SelectItem>
+                <SelectItem value="customerName-desc">客户名称 Z→A</SelectItem>
+                <SelectItem value="contactPerson-asc">联系人 A→Z</SelectItem>
+                <SelectItem value="contactPerson-desc">联系人 Z→A</SelectItem>
+                <SelectItem value="createdAt-asc">创建时间 旧→新</SelectItem>
+                <SelectItem value="city-asc">城市 A→Z</SelectItem>
+                <SelectItem value="city-desc">城市 Z→A</SelectItem>
+                <SelectItem value="industry-asc">行业 A→Z</SelectItem>
+                <SelectItem value="industry-desc">行业 Z→A</SelectItem>
+                <SelectItem value="status-asc">状态 A→Z</SelectItem>
+                <SelectItem value="status-desc">状态 Z→A</SelectItem>
+                <SelectItem value="leadSource-asc">线索来源 A→Z</SelectItem>
+                <SelectItem value="leadSource-desc">线索来源 Z→A</SelectItem>
+              </SelectContent>
+            </Select>
+          )}
           {displayedData.length > 0 && (
             <>
               <Button
@@ -937,6 +1029,14 @@ export function LeadsTableWithBulk({
             >
               <UserRound className="h-4 w-4" />
               批量指定
+            </button>
+            <button
+              type="button"
+              className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent hover:text-accent-foreground"
+              onClick={openMonthlyPlanDialog}
+            >
+              <CalendarDays className="h-4 w-4" />
+              分配至本月计划
             </button>
             <>
               <div className="my-1 border-t border-border" />
@@ -1329,9 +1429,20 @@ export function LeadsTableWithBulk({
                       <tr>
                         <td colSpan={12} className="bg-gray-50 px-4 py-4 !text-left">
                           <div className="rounded-lg border border-gray-200 bg-white p-4 text-left">
-                            <h4 className="mb-3 font-semibold text-gray-900 text-left">
-                              跟进时间线
-                            </h4>
+                            <div className="mb-3 flex items-center justify-between">
+                              <h4 className="font-semibold text-gray-900 text-left">
+                                跟进时间线
+                              </h4>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-8 gap-1.5 text-muted-foreground hover:text-foreground"
+                                onClick={() => toggleExpandedLead(lead.id)}
+                              >
+                                <ChevronUp className="h-4 w-4" />
+                                收起
+                              </Button>
+                            </div>
                             <FollowUpTimeline
                               leadId={lead.id}
                               currentUserRole={currentUserRole}
@@ -1471,6 +1582,75 @@ export function LeadsTableWithBulk({
           </DialogContent>
         </Dialog>
 
+        {/* 分配至本月计划对话框 */}
+        <Dialog open={monthlyPlanOpen} onOpenChange={setMonthlyPlanOpen}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>分配至本月计划</DialogTitle>
+              <DialogDescription>
+                已选 {selectedIds.size} 条线索。选择跟进人后，这些线索将加入其本月计划（可多选，同一条线索可同时加入多人）。
+              </DialogDescription>
+            </DialogHeader>
+            <div className="grid gap-4 py-2">
+              <div className="grid gap-2">
+                <Label>跟进人（可多选）</Label>
+                <div className="max-h-[200px] overflow-y-auto rounded-md border border-input p-2 space-y-2">
+                  {users.map((u) => (
+                    <label
+                      key={u.id}
+                      className="flex items-center gap-2 cursor-pointer hover:bg-muted/50 rounded px-2 py-1.5"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={monthlyPlanUserIds.has(u.id)}
+                        onChange={(e) => {
+                          setMonthlyPlanUserIds((prev) => {
+                            const next = new Set(prev);
+                            if (e.target.checked) next.add(u.id);
+                            else next.delete(u.id);
+                            return next;
+                          });
+                        }}
+                        className="h-4 w-4 rounded border-input"
+                      />
+                      <span className="text-sm">{u.name}</span>
+                    </label>
+                  ))}
+                </div>
+                {monthlyPlanUserIds.size > 0 && (
+                  <p className="text-sm text-muted-foreground">
+                    已选 {monthlyPlanUserIds.size} 人，{selectedIds.size} 条线索将加入其 {new Date().getFullYear()} 年 {new Date().getMonth() + 1} 月计划
+                  </p>
+                )}
+              </div>
+              {monthlyPlanError && (
+                <p className="text-sm text-destructive">{monthlyPlanError}</p>
+              )}
+            </div>
+            <DialogFooter className="gap-2 sm:gap-0">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setMonthlyPlanOpen(false)}
+                disabled={monthlyPlanLoading}
+              >
+                取消
+              </Button>
+              <Button
+                type="button"
+                onClick={handleMonthlyPlanSubmit}
+                disabled={monthlyPlanLoading || monthlyPlanUserIds.size === 0}
+                className="gap-2"
+              >
+                {monthlyPlanLoading ? (
+                  <LoadingSpinner type="arc" size={16} className="shrink-0" />
+                ) : null}
+                确定
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
         {/* 查看记录：右侧滑层展示完整字段并支持行内编辑 */}
         <Sheet open={!!detailLeadId} onOpenChange={(open) => !open && setDetailLeadId(null)}>
           <SheetContent side="right" className="flex flex-col overflow-hidden">
@@ -1498,7 +1678,7 @@ export function LeadsTableWithBulk({
                   <SheetHeader className="shrink-0 border-b pb-3 text-left">
                     <SheetTitle>线索详情 · {lead.customerName}</SheetTitle>
                   </SheetHeader>
-                  <div className="mt-4 flex-1 overflow-y-auto space-y-4 text-left sheet-scroll">
+                  <SheetScrollArea>
                     {detailRows.map(({ key, label, editable }) => (
                       <div key={key} className="space-y-1.5 text-left">
                         <div className="text-xs font-medium text-muted-foreground">{label}</div>
@@ -1613,7 +1793,17 @@ export function LeadsTableWithBulk({
                             )}
                         </div>
                       )}
-                  </div>
+
+                    <div className="mt-6 pt-4 border-t">
+                      <h4 className="mb-3 text-sm font-semibold text-foreground">跟进时间线</h4>
+                      <FollowUpTimeline
+                        leadId={lead.id}
+                        currentUserRole={currentUserRole}
+                        currentUserId={currentUserId}
+                        refreshKey={followUpRefreshKeys[lead.id] ?? 0}
+                      />
+                    </div>
+                  </SheetScrollArea>
                 </>
               );
             })()}

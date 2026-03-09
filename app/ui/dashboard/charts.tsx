@@ -14,6 +14,7 @@ import {
   Legend,
   LineChart,
   Line,
+  LabelList,
 } from "recharts";
 import { lusitana } from "@/app/ui/fonts";
 
@@ -25,6 +26,13 @@ const CHART_COLORS = [
   "hsl(200, 30%, 55%)", // 浅灰蓝
   "hsl(215, 20%, 60%)", // 更浅
 ];
+
+/** 漏斗看板数据项 */
+export type FunnelDataItem = {
+  label: string;
+  value: number;
+  unit: string;
+};
 
 /** 图表卡片容器 - 与现有 Card 风格一致 */
 function ChartCard({
@@ -47,6 +55,75 @@ function ChartCard({
       </div>
       <div className="px-2 pb-4">{children}</div>
     </div>
+  );
+}
+
+/** 阶梯式条形图 - 直观展示漏斗逻辑，支持自定义标题 */
+export function FunnelChart({
+  title,
+  data,
+}: {
+  title: string;
+  data: FunnelDataItem[];
+}) {
+  const chartData = data.map((item, i) => ({
+    name: item.label,
+    value: Math.max(item.value, 0),
+    unit: item.unit,
+    label: `${item.value}${item.unit}`,
+    fill: CHART_COLORS[i % CHART_COLORS.length],
+  }));
+  if (!chartData.length || chartData.every((d) => d.value === 0)) {
+    return (
+      <ChartCard title={title}>
+        <div className="flex h-[200px] items-center justify-center text-sm text-gray-500">
+          暂无数据
+        </div>
+      </ChartCard>
+    );
+  }
+  return (
+    <ChartCard title={title}>
+      <ResponsiveContainer width="100%" height={220}>
+        <BarChart
+          data={chartData}
+          layout="vertical"
+          margin={{ top: 8, right: 40, left: 8, bottom: 8 }}
+        >
+          <CartesianGrid strokeDasharray="3 3" stroke="hsl(214, 32%, 91%)" horizontal={false} />
+          <XAxis type="number" tick={{ fontSize: 12, fill: "#6b7280" }} tickLine={false} />
+          <YAxis
+            type="category"
+            dataKey="name"
+            width={60}
+            tick={{ fontSize: 12, fill: "#6b7280" }}
+            tickLine={false}
+            axisLine={false}
+          />
+          <Tooltip
+            contentStyle={{
+              borderRadius: "8px",
+              border: "1px solid hsl(214, 32%, 91%)",
+              fontSize: 12,
+            }}
+            formatter={(value, _name, props) => [
+              `${value ?? 0}${(props.payload as { unit?: string })?.unit ?? ""}`,
+              "数量",
+            ]}
+          />
+          <Bar dataKey="value" radius={[0, 4, 4, 0]} name="数量">
+            {chartData.map((entry, i) => (
+              <Cell key={i} fill={entry.fill} />
+            ))}
+            <LabelList
+              dataKey="label"
+              position="right"
+              style={{ fontSize: 12, fill: "#6b7280" }}
+            />
+          </Bar>
+        </BarChart>
+      </ResponsiveContainer>
+    </ChartCard>
   );
 }
 

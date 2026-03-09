@@ -289,6 +289,41 @@ export async function batchSetLeadKeyFocusAction(
   return { success: true, count };
 }
 
+/** 分配至本月计划：将勾选的线索加入指定跟进人的本月计划，并同步更新线索负责人（仅 admin） */
+export async function addLeadsToMonthlyPlanAction(
+  leadIds: string[],
+  userIds: string[]
+): Promise<{ error?: string } | { success: true; count: number }> {
+  const session = await auth();
+  const role = (session?.user as { role?: string })?.role ?? "sales";
+  if (role !== "admin") return { error: "仅管理员可分配本月计划" };
+  if (!leadIds?.length || !userIds?.length) return { error: "请选择线索并指定至少一位跟进人" };
+
+  const planMonth = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}`;
+  const records: { leadId: string; userId: string; planMonth: string }[] = [];
+  for (const leadId of leadIds) {
+    for (const userId of userIds) {
+      records.push({ leadId, userId, planMonth });
+    }
+  }
+
+  await prisma.crm_monthly_plan_lead.createMany({
+    data: records,
+    skipDuplicates: true,
+  });
+
+  // 追加负责人，不覆盖原有（多人共同负责）
+  const assigneeIds = Array.from(new Set(userIds.filter(Boolean)));
+  for (const userId of assigneeIds) {
+    await addLeadAssigneeBatch(leadIds, userId);
+  }
+
+  revalidatePath("/dashboard/crm/leads");
+  revalidatePath("/dashboard/crm/monthly-plan");
+  revalidatePath("/dashboard");
+  return { success: true, count: leadIds.length };
+}
+
 // 物理删除线索（仅 admin）：强制删除线索，并级联删除关联的商机与客户（谨慎使用）
 export async function deleteLeadAction(formData: FormData) {
   const session = await auth();
@@ -557,6 +592,9 @@ export async function updateCustomerAction(
   const contactPhoneRaw = (formData.get("contactPhone") as string) ?? "";
   const contactPhone = contactPhoneRaw.trim();
 
+  const signedAtStr = (formData.get("signedAt") as string)?.trim();
+  const signedAt = signedAtStr ? new Date(signedAtStr) : null;
+
   await updateCustomer(customerId, {
     name,
     nickname: (formData.get("nickname") as string) || undefined,
@@ -567,10 +605,12 @@ export async function updateCustomerAction(
     tags: (formData.get("tags") as string) || undefined,
     mainProducts: (formData.get("mainProducts") as string) || undefined,
     actualAmount,
+    ...(formData.has("signedAt") && { signedAt }),
     contactPhone,
   });
 
   revalidatePath("/dashboard/crm/customers");
+  revalidatePath("/dashboard/crm/pending-customers");
   revalidatePath("/dashboard");
   const isInline = formData.get("inline") === "1";
   if (!isInline) redirect("/dashboard/crm/customers");
@@ -1206,10 +1246,13 @@ export async function updateCustomerStatusWithFollowUpAction(
     return { error: "无权限" };
   }
 
-  // 更新客户状态
+  // 更新客户状态；状态变为「已签约」时自动填充签约日期
   await prisma.crm_customer.update({
     where: { id: customerId },
-    data: { status: newStatus },
+    data: {
+      status: newStatus,
+      ...(newStatus === "已签约" && { signedAt: new Date() }),
+    },
   });
 
   // 创建跟进记录
@@ -1222,6 +1265,7 @@ export async function updateCustomerStatusWithFollowUpAction(
   });
 
   revalidatePath("/dashboard/crm/customers");
+  revalidatePath("/dashboard/crm/pending-customers");
   revalidatePath("/dashboard");
   return { success: true };
 }
@@ -1516,13 +1560,25 @@ export async function markMyNotificationsAsReadAction() {
   if (ids.length > 0) await markNotificationsAsSent(ids);
 }
 
-/** 全局搜索：线索、商机、客户（分栏，每表单独分页，每页 5 条） */
+/** 全局搜索：线索、商机、客户、待签约、本月计划、跟进（分栏，每表单独分页，每页 5 条） */
 export async function globalSearchCrmAction(
   keyword: string,
   leadPage: number,
   oppPage: number,
-  customerPage: number
+  customerPage: number,
+  pendingCustomerPage: number,
+  monthlyPlanPage: number,
+  followUpPage: number
 ) {
   const auth = await getCrmAuth();
-  return globalSearchCrm(auth, keyword, leadPage, oppPage, customerPage);
+  return globalSearchCrm(
+    auth,
+    keyword,
+    leadPage,
+    oppPage,
+    customerPage,
+    pendingCustomerPage,
+    monthlyPlanPage,
+    followUpPage
+  );
 }
