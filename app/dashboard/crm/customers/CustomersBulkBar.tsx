@@ -47,7 +47,10 @@ export function CustomersBulkBar({
       if (result?.error) {
         setAssignError(result.error);
       } else {
-        showAlert(`已为 ${selectedIds.length} 条客户指定负责人`, { type: "success", title: "批量指定成功" });
+        showAlert(`已为 ${selectedIds.length} 条客户追加负责人（已存在则不变）`, {
+          type: "success",
+          title: "批量追加成功",
+        });
         setSalesPersonId("");
         onClear();
         router.refresh();
@@ -94,7 +97,7 @@ export function CustomersBulkBar({
         <div className="flex items-center gap-2">
           <Select value={salesPersonId} onValueChange={setSalesPersonId}>
             <SelectTrigger className="h-8 w-[160px]">
-              <SelectValue placeholder="指定负责人" />
+              <SelectValue placeholder="选择要追加的负责人" />
             </SelectTrigger>
             <SelectContent>
               {users.map((u) => (
@@ -115,7 +118,7 @@ export function CustomersBulkBar({
             ) : (
               <UserPlus className="h-4 w-4" />
             )}
-            批量指定
+            批量追加负责人
           </Button>
         </div>
         <Button

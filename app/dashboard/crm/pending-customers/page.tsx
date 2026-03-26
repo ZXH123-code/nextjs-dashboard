@@ -1,4 +1,4 @@
-import { getCustomers, getCrmAuth, getPageForCustomerId } from "@/app/lib/crm";
+import { getCustomers, getCrmAuth, getPageForCustomerId, getUsers } from "@/app/lib/crm";
 import { CustomersTable } from "../customers/CustomersTable";
 import { Pagination } from "@/components/ui/pagination";
 import { redirect } from "next/navigation";
@@ -38,10 +38,12 @@ export default async function PendingCustomersPage({
   let total = 0;
   let currentUserRole = "sales";
   let currentUserId: string | undefined;
+  let users: Awaited<ReturnType<typeof getUsers>> = [];
   try {
     const customersRes = await getCustomers(crmAuth, { page, pageSize, statusFilter, sortBy, sortOrder });
     customers = customersRes.items;
     total = customersRes.total;
+    users = await getUsers();
     const session = await auth();
     currentUserRole = (session?.user as { role?: string })?.role ?? "sales";
     currentUserId = (session?.user as { id?: string })?.id;
@@ -59,6 +61,7 @@ export default async function PendingCustomersPage({
 
       <CustomersTable
         customers={customers}
+        users={users}
         currentUserRole={currentUserRole}
         currentUserId={currentUserId}
         isAdmin={currentUserRole === "admin"}

@@ -83,6 +83,7 @@ export function LeadSalesPersonSelect({
   ];
 
   const handleConfirm = async () => {
+    if (selectedAssigneeIds.length === 0) return;
     const defaultText = defaultLines.join("\n");
     const content = supplement.trim() ? `${defaultText}\n${supplement.trim()}` : defaultText;
     const previousIds = Array.from(new Set(currentAssigneeIds));
@@ -179,7 +180,7 @@ export function LeadSalesPersonSelect({
                 </div>
               </div>
               <div className="text-xs text-muted-foreground">
-                可勾选多位负责人。取消全部勾选表示「未指定负责人」。
+                可勾选多位负责人；至少保留一人（与商机/客户负责人联动同步）。
               </div>
             </div>
             <div className="grid gap-2">
@@ -207,7 +208,7 @@ export function LeadSalesPersonSelect({
             <Button
               type="button"
               onClick={handleConfirm}
-              disabled={isSubmitting}
+              disabled={isSubmitting || selectedAssigneeIds.length === 0}
               className="gap-2"
             >
               {isSubmitting ? <LoadingSpinner type="arc" size={16} className="shrink-0" /> : null}

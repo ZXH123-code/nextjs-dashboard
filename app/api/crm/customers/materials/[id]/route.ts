@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { del } from "@vercel/blob";
-import { getCrmAuth } from "@/app/lib/crm";
+import { canAccessCustomerAsSales, getCrmAuth } from "@/app/lib/crm";
 import { prisma } from "@/app/lib/prisma";
 
 /**
@@ -26,16 +26,15 @@ export async function DELETE(
     const material = await prisma.crm_customer_material.findUnique({
       where: { id },
       include: {
-        customer: { select: { salesPersonId: true } },
+        customer: {
+          select: { salesPersonId: true, assignees: { select: { userId: true } } },
+        },
       },
     });
     if (!material) {
       return NextResponse.json({ error: "资料不存在" }, { status: 404 });
     }
-    if (
-      auth.role !== "admin" &&
-      material.customer.salesPersonId !== auth.userId
-    ) {
+    if (!canAccessCustomerAsSales(material.customer, auth.userId, auth.role)) {
       return NextResponse.json({ error: "无权限删除该资料" }, { status: 403 });
     }
 

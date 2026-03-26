@@ -17,6 +17,8 @@ model users {
   role     String? @default("sales") @db.VarChar(20) // admin=销售总管看全部, sales=销售人员只看自己的
 
   crm_lead_assignees              crm_lead_assignee[]
+  crm_opportunity_assignees       crm_opportunity_assignee[]
+  crm_customer_assignees          crm_customer_assignee[]
   crm_opportunities               crm_opportunity[]                  @relation("opportunity_sales")
   crm_opportunities_delivery      crm_opportunity[]                  @relation("opportunity_delivery")
   crm_customers                   crm_customer[]
@@ -116,6 +118,36 @@ model crm_lead_assignee {
   @@map("crm_lead_assignees")
 }
 
+/// 商机销售负责人（多对多），与线索/客户 assignee 集合保持一致（由业务层同步）
+model crm_opportunity_assignee {
+  opportunityId String   @map("opportunity_id") @db.Uuid
+  userId        String   @map("user_id") @db.Uuid
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+
+  opportunity crm_opportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+  user        users           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([opportunityId, userId])
+  @@index([userId])
+  @@index([opportunityId])
+  @@map("crm_opportunity_assignees")
+}
+
+/// 客户销售负责人（多对多），与线索/商机 assignee 集合保持一致（由业务层同步）
+model crm_customer_assignee {
+  customerId String   @map("customer_id") @db.Uuid
+  userId     String   @map("user_id") @db.Uuid
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+
+  customer crm_customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  user     users        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([customerId, userId])
+  @@index([userId])
+  @@index([customerId])
+  @@map("crm_customer_assignees")
+}
+
 /// 商机管理：来源于线索（有意向时转入），状态更新后可转入客户
 model crm_opportunity {
   id                String    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
@@ -136,6 +168,7 @@ model crm_opportunity {
   lead           crm_lead?       @relation(fields: [leadId], references: [id])
   salesPerson    users?          @relation("opportunity_sales", fields: [salesPersonId], references: [id])
   deliveryPerson users?          @relation("opportunity_delivery", fields: [deliveryPersonId], references: [id])
+  assignees      crm_opportunity_assignee[]
   customer       crm_customer?
   followUps      crm_follow_up[]
 
@@ -168,6 +201,7 @@ model crm_customer {
 
   opportunity crm_opportunity?        @relation(fields: [opportunityId], references: [id])
   salesPerson users?                  @relation(fields: [salesPersonId], references: [id])
+  assignees   crm_customer_assignee[]
   followUps   crm_follow_up[]
   materials   crm_customer_material[]
 

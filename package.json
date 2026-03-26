@@ -8,6 +8,7 @@
     "db:generate": "prisma generate",
     "db:push": "prisma db push",
     "db:push:local": "dotenv -e .env.local -- prisma db push",
+    "db:generate:local": "dotenv -e .env.local -- prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:migrate:local": "dotenv -e .env.local -- prisma migrate dev",
     "db:migrate:deploy:local": "dotenv -e .env.local -- prisma migrate deploy",

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getCrmAuth } from "@/app/lib/crm";
+import { canAccessCustomerAsSales, getCrmAuth } from "@/app/lib/crm";
 import { prisma } from "@/app/lib/prisma";
 
 /** 图片/PDF 统一水印文案（英文，PDF 标准字体仅支持 WinAnsi） */
@@ -56,16 +56,15 @@ export async function GET(
     const material = await prisma.crm_customer_material.findUnique({
       where: { id },
       include: {
-        customer: { select: { salesPersonId: true } },
+        customer: {
+          select: { salesPersonId: true, assignees: { select: { userId: true } } },
+        },
       },
     });
     if (!material) {
       return new NextResponse("资料不存在", { status: 404 });
     }
-    if (
-      auth.role !== "admin" &&
-      material.customer.salesPersonId !== auth.userId
-    ) {
+    if (!canAccessCustomerAsSales(material.customer, auth.userId, auth.role)) {
       return new NextResponse("无权限下载该资料", { status: 403 });
     }
 

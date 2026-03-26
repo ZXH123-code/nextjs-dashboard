@@ -39,8 +39,42 @@ export { LEAD_STATUS, OPPORTUNITY_STATUS, CUSTOMER_STATUS } from "./crm-constant
 
 export type CrmAuth = { userId: string; role: string } | null;
 
-function salesFilter(userId: string) {
-  return { salesPersonId: userId };
+/** 销售负责人全量同步时至少保留一人 */
+export const CRM_ASSIGNEE_MIN_ONE_ERROR = "至少保留一位销售负责人";
+
+export function normalizeDealAssigneeUserIds(userIds: (string | null | undefined)[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const id of userIds) {
+    if (!id || typeof id !== "string") continue;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
+
+function opportunitySalesWhere(userId: string): Prisma.crm_opportunityWhereInput {
+  return {
+    OR: [{ salesPersonId: userId }, { assignees: { some: { userId } } }],
+  };
+}
+
+function customerSalesWhere(userId: string): Prisma.crm_customerWhereInput {
+  return {
+    OR: [{ salesPersonId: userId }, { assignees: { some: { userId } } }],
+  };
+}
+
+/** 客户资料 API：admin 或主负责人/assignee 之一 */
+export function canAccessCustomerAsSales(
+  row: { salesPersonId: string | null; assignees: { userId: string }[] },
+  userId: string,
+  role: string
+): boolean {
+  if (role === "admin") return true;
+  if (row.salesPersonId === userId) return true;
+  return row.assignees.some((a) => a.userId === userId);
 }
 
 function leadAssigneeFilter(userId: string): Prisma.crm_leadWhereInput {
@@ -68,8 +102,10 @@ function buildLeadWhere(auth: CrmAuth, includeDeleted = false) {
 /** 驾驶舱统计（含漏斗看板所需：已签约、待签约、商机、本月计划） */
 export async function getCrmCounts(auth: CrmAuth) {
   const leadWhere = buildLeadWhere(auth);
-  const base =
-    !auth ? emptyWhere : auth.role === "admin" ? {} : salesFilter(auth.userId);
+  const oppBase =
+    !auth ? emptyWhere : auth.role === "admin" ? {} : opportunitySalesWhere(auth.userId);
+  const custBase =
+    !auth ? emptyWhere : auth.role === "admin" ? {} : customerSalesWhere(auth.userId);
   const d = new Date();
   const planMonth = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
   const mpWhere: Prisma.crm_monthly_plan_leadWhereInput = {
@@ -85,10 +121,10 @@ export async function getCrmCounts(auth: CrmAuth) {
     monthlyPlanRows,
   ] = await Promise.all([
     prisma.crm_lead.count({ where: leadWhere }),
-    prisma.crm_opportunity.count({ where: base }),
-    prisma.crm_customer.count({ where: base }),
-    prisma.crm_customer.count({ where: { ...base, status: "已签约" } }),
-    prisma.crm_customer.count({ where: { ...base, status: "预备签约" } }),
+    prisma.crm_opportunity.count({ where: oppBase }),
+    prisma.crm_customer.count({ where: custBase }),
+    prisma.crm_customer.count({ where: { ...custBase, status: "已签约" } }),
+    prisma.crm_customer.count({ where: { ...custBase, status: "预备签约" } }),
     prisma.crm_monthly_plan_lead.findMany({
       where: mpWhere,
       select: { leadId: true },
@@ -115,8 +151,10 @@ export type DashboardChartData = {
 
 export async function getCrmDashboardCharts(auth: CrmAuth): Promise<DashboardChartData> {
   const leadWhere = buildLeadWhere(auth);
-  const base =
-    !auth ? emptyWhere : auth.role === "admin" ? {} : salesFilter(auth.userId);
+  const oppBase =
+    !auth ? emptyWhere : auth.role === "admin" ? {} : opportunitySalesWhere(auth.userId);
+  const custBase =
+    !auth ? emptyWhere : auth.role === "admin" ? {} : customerSalesWhere(auth.userId);
 
   const sevenDaysAgo = new Date();
   sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
@@ -137,7 +175,7 @@ export async function getCrmDashboardCharts(auth: CrmAuth): Promise<DashboardCha
     }),
     prisma.crm_opportunity.groupBy({
       by: ["status"],
-      where: base,
+      where: oppBase,
       _count: { status: true },
     }),
     prisma.crm_lead.groupBy({
@@ -156,11 +194,11 @@ export async function getCrmDashboardCharts(auth: CrmAuth): Promise<DashboardCha
       select: { createdAt: true },
     }),
     prisma.crm_opportunity.findMany({
-      where: { ...base, createdAt: { gte: sevenDaysAgo } },
+      where: { ...oppBase, createdAt: { gte: sevenDaysAgo } },
       select: { createdAt: true },
     }),
     prisma.crm_customer.findMany({
-      where: { ...base, createdAt: { gte: sevenDaysAgo } },
+      where: { ...custBase, createdAt: { gte: sevenDaysAgo } },
       select: { createdAt: true },
     }),
   ]);
@@ -813,27 +851,132 @@ export async function updateLeadStatus(id: string, status: string) {
   });
 }
 
-/** 设置线索负责人列表（全量覆盖） */
-export async function setLeadAssignees(leadId: string, userIds: string[]) {
-  const ids = Array.from(new Set((userIds ?? []).filter(Boolean)));
+/**
+ * 以线索为锚，全量同步销售负责人到线索 / 关联商机 / 关联客户；并更新商机与客户上的 salesPersonId（主负责人 = 列表第一项）。
+ */
+export async function syncDealSalesAssignees(leadId: string, userIds: string[]) {
+  const ids = normalizeDealAssigneeUserIds(userIds);
+  if (ids.length === 0) throw new Error(CRM_ASSIGNEE_MIN_ONE_ERROR);
+
   await prisma.$transaction(async (tx) => {
     await tx.crm_lead_assignee.deleteMany({ where: { leadId } });
-    if (ids.length > 0) {
-      await tx.crm_lead_assignee.createMany({
-        data: ids.map((userId) => ({ leadId, userId })),
+    await tx.crm_lead_assignee.createMany({
+      data: ids.map((userId) => ({ leadId, userId })),
+      skipDuplicates: true,
+    });
+
+    const primaryId = ids[0]!;
+    const lead = await tx.crm_lead.findUnique({
+      where: { id: leadId },
+      select: {
+        opportunity: { select: { id: true, customer: { select: { id: true } } } },
+      },
+    });
+
+    if (lead?.opportunity) {
+      const oppId = lead.opportunity.id;
+      await tx.crm_opportunity_assignee.deleteMany({ where: { opportunityId: oppId } });
+      await tx.crm_opportunity_assignee.createMany({
+        data: ids.map((userId) => ({ opportunityId: oppId, userId })),
         skipDuplicates: true,
+      });
+      await tx.crm_opportunity.update({
+        where: { id: oppId },
+        data: { salesPersonId: primaryId },
+      });
+      if (lead.opportunity.customer) {
+        const custId = lead.opportunity.customer.id;
+        await tx.crm_customer_assignee.deleteMany({ where: { customerId: custId } });
+        await tx.crm_customer_assignee.createMany({
+          data: ids.map((userId) => ({ customerId: custId, userId })),
+          skipDuplicates: true,
+        });
+        await tx.crm_customer.update({
+          where: { id: custId },
+          data: { salesPersonId: primaryId },
+        });
+      }
+    }
+  });
+}
+
+/** 无关联线索的商机：仅同步商机与客户 assignee（用于 leadId 为空的边缘数据） */
+export async function syncOppCustomerAssigneesWithoutLead(opportunityId: string, userIds: string[]) {
+  const ids = normalizeDealAssigneeUserIds(userIds);
+  if (ids.length === 0) throw new Error(CRM_ASSIGNEE_MIN_ONE_ERROR);
+
+  await prisma.$transaction(async (tx) => {
+    const opp = await tx.crm_opportunity.findUnique({
+      where: { id: opportunityId },
+      include: { customer: { select: { id: true } } },
+    });
+    if (!opp) throw new Error("商机不存在");
+
+    const primaryId = ids[0]!;
+    await tx.crm_opportunity_assignee.deleteMany({ where: { opportunityId } });
+    await tx.crm_opportunity_assignee.createMany({
+      data: ids.map((userId) => ({ opportunityId, userId })),
+      skipDuplicates: true,
+    });
+    await tx.crm_opportunity.update({
+      where: { id: opportunityId },
+      data: { salesPersonId: primaryId },
+    });
+
+    if (opp.customer) {
+      const cid = opp.customer.id;
+      await tx.crm_customer_assignee.deleteMany({ where: { customerId: cid } });
+      await tx.crm_customer_assignee.createMany({
+        data: ids.map((userId) => ({ customerId: cid, userId })),
+        skipDuplicates: true,
+      });
+      await tx.crm_customer.update({
+        where: { id: cid },
+        data: { salesPersonId: primaryId },
       });
     }
   });
 }
 
-/** 批量给多条线索「追加」同一个负责人（不影响已有负责人） */
+/** 无关联线索的商机：在现有负责人基础上追加一人（并同步到关联客户） */
+async function addOppCustomerAssigneeWithoutLead(
+  opportunityId: string,
+  userId: string
+) {
+  const existing = await prisma.crm_opportunity_assignee.findMany({
+    where: { opportunityId },
+    orderBy: { createdAt: "asc" },
+    select: { userId: true },
+  });
+  const ordered = existing.map((e) => e.userId);
+  if (ordered.includes(userId)) {
+    await syncOppCustomerAssigneesWithoutLead(opportunityId, ordered);
+    return;
+  }
+  await syncOppCustomerAssigneesWithoutLead(opportunityId, [...ordered, userId]);
+}
+
+/** 设置线索负责人列表（全量覆盖，并同步下游商机/客户） */
+export async function setLeadAssignees(leadId: string, userIds: string[]) {
+  await syncDealSalesAssignees(leadId, userIds);
+}
+
+/** 批量给多条线索「追加」同一个负责人，并同步各条关联的商机/客户 */
 export async function addLeadAssigneeBatch(leadIds: string[], userId: string) {
   if (!leadIds?.length || !userId) return;
-  await prisma.crm_lead_assignee.createMany({
-    data: leadIds.map((leadId) => ({ leadId, userId })),
-    skipDuplicates: true,
-  });
+  for (const leadId of leadIds) {
+    const existing = await prisma.crm_lead_assignee.findMany({
+      where: { leadId },
+      orderBy: { createdAt: "asc" },
+      select: { userId: true },
+    });
+    const ordered = existing.map((e) => e.userId);
+    if (ordered.includes(userId)) {
+      await syncDealSalesAssignees(leadId, ordered);
+      continue;
+    }
+    await syncDealSalesAssignees(leadId, [...ordered, userId]);
+  }
 }
 
 export async function updateLead(
@@ -1032,7 +1175,7 @@ export type GetOpportunitiesOptions = {
   sortOrder?: "asc" | "desc";
 };
 
-/** getOpportunities 返回的商机项类型（含 lead、customer、salesPerson、deliveryPerson，amount 为 number） */
+/** getOpportunities 返回的商机项类型（含 lead、customer、salesPerson、deliveryPerson、assignees，amount 为 number） */
 export type OpportunityListItem = Omit<
   Prisma.crm_opportunityGetPayload<{
     include: {
@@ -1040,6 +1183,7 @@ export type OpportunityListItem = Omit<
       salesPerson: { select: { id: true; name: true } };
       deliveryPerson: { select: { id: true; name: true } };
       customer: { select: { id: true; name: true } };
+      assignees: { include: { user: { select: { id: true; name: true } } } };
     };
   }>,
   "amount"
@@ -1050,7 +1194,11 @@ export async function getOpportunities(
   options: GetOpportunitiesOptions = {}
 ): Promise<{ items: OpportunityListItem[]; total: number }> {
   const { page, pageSize, leadId, sortBy, sortOrder } = options;
-  let where = !auth ? emptyWhere : auth.role === "admin" ? {} : salesFilter(auth.userId);
+  let where: Prisma.crm_opportunityWhereInput = !auth
+    ? emptyWhere
+    : auth.role === "admin"
+      ? {}
+      : opportunitySalesWhere(auth.userId);
   if (leadId) {
     where = { ...where, leadId };
   }
@@ -1066,6 +1214,10 @@ export async function getOpportunities(
     salesPerson: { select: { id: true, name: true } },
     deliveryPerson: { select: { id: true, name: true } },
     customer: { select: { id: true, name: true } },
+    assignees: {
+      orderBy: { createdAt: "asc" as const },
+      include: { user: { select: { id: true, name: true } } },
+    },
   };
 
   const mapAmount = (rows: Awaited<ReturnType<typeof prisma.crm_opportunity.findMany>>) =>
@@ -1099,7 +1251,11 @@ export async function getPageForOpportunityId(
 ): Promise<number> {
   if (sortBy !== "createdAt" && sortBy !== undefined) return 1;
   if (sortOrder === "asc") return 1;
-  let where: Prisma.crm_opportunityWhereInput = !auth ? emptyWhere : auth.role === "admin" ? {} : salesFilter(auth.userId);
+  let where: Prisma.crm_opportunityWhereInput = !auth
+    ? emptyWhere
+    : auth.role === "admin"
+      ? {}
+      : opportunitySalesWhere(auth.userId);
   if (leadId) where = { ...where, leadId };
   const opp = await prisma.crm_opportunity.findFirst({
     where: { id: opportunityId, ...where },
@@ -1142,7 +1298,7 @@ export async function createOpportunity(data: {
     if (keyFocusByAdmin == null) keyFocusByAdmin = lead?.keyFocusByAdmin ?? false;
   }
 
-  return prisma.crm_opportunity.create({
+  const opportunity = await prisma.crm_opportunity.create({
     data: {
       name: data.name,
       leadId: data.leadId,
@@ -1157,6 +1313,37 @@ export async function createOpportunity(data: {
       keyFocusByAdmin: keyFocusByAdmin ?? false,
     },
   });
+
+  if (data.leadId) {
+    const leadRows = await prisma.crm_lead_assignee.findMany({
+      where: { leadId: data.leadId },
+      orderBy: { createdAt: "asc" },
+      select: { userId: true },
+    });
+    let assigneeIds = leadRows.map((r) => r.userId);
+    if (assigneeIds.length === 0 && data.salesPersonId) {
+      assigneeIds = [data.salesPersonId];
+    }
+    if (assigneeIds.length > 0) {
+      await prisma.$transaction(async (tx) => {
+        await tx.crm_opportunity_assignee.deleteMany({ where: { opportunityId: opportunity.id } });
+        await tx.crm_opportunity_assignee.createMany({
+          data: assigneeIds.map((userId) => ({ opportunityId: opportunity.id, userId })),
+          skipDuplicates: true,
+        });
+        await tx.crm_opportunity.update({
+          where: { id: opportunity.id },
+          data: { salesPersonId: assigneeIds[0]! },
+        });
+      });
+    }
+  } else if (data.salesPersonId) {
+    await prisma.crm_opportunity_assignee.create({
+      data: { opportunityId: opportunity.id, userId: data.salesPersonId },
+    });
+  }
+
+  return opportunity;
 }
 
 export async function updateOpportunity(
@@ -1214,6 +1401,7 @@ export type CustomerListItem = Omit<
     include: {
       opportunity: { select: { id: true; name: true; lead: { select: { id: true; contactPhone: true; customerTier: true } } } };
       salesPerson: { select: { id: true; name: true } };
+      assignees: { include: { user: { select: { id: true; name: true } } } };
     };
   }>,
   "actualAmount"
@@ -1224,7 +1412,7 @@ export async function getCustomers(
   options: GetCustomersOptions = {}
 ): Promise<{ items: CustomerListItem[]; total: number }> {
   const { page, pageSize, statusFilter, sortBy = "createdAt", sortOrder = "desc" } = options;
-  const baseWhere = !auth ? emptyWhere : auth.role === "admin" ? {} : salesFilter(auth.userId);
+  const baseWhere = !auth ? emptyWhere : auth.role === "admin" ? {} : customerSalesWhere(auth.userId);
   const where = statusFilter
     ? { ...baseWhere, status: statusFilter }
     : baseWhere;
@@ -1247,6 +1435,10 @@ export async function getCustomers(
       },
     },
     salesPerson: { select: { id: true, name: true } },
+    assignees: {
+      orderBy: { createdAt: "asc" as const },
+      include: { user: { select: { id: true, name: true } } },
+    },
   };
 
   const mapAmount = (rows: Awaited<ReturnType<typeof prisma.crm_customer.findMany>>) =>
@@ -1276,7 +1468,11 @@ export async function getPageForCustomerId(
   pageSize: number,
   options?: { statusFilter?: string }
 ): Promise<number> {
-  const baseWhere: Prisma.crm_customerWhereInput = !auth ? emptyWhere : auth.role === "admin" ? {} : salesFilter(auth.userId);
+  const baseWhere: Prisma.crm_customerWhereInput = !auth
+    ? emptyWhere
+    : auth.role === "admin"
+      ? {}
+      : customerSalesWhere(auth.userId);
   const where = options?.statusFilter ? { ...baseWhere, status: options.statusFilter } : baseWhere;
   const customer = await prisma.crm_customer.findFirst({
     where: { id: customerId, ...where },
@@ -1328,16 +1524,48 @@ export async function updateCustomer(
   });
 }
 
-/** 批量更新客户负责人 */
+/** 批量给客户追加负责人（在现有线索/商机/客户 assignee 基础上追加，不覆盖原有多负责人） */
 export async function updateCustomerSalesPersonBatch(
   customerIds: string[],
   salesPersonId: string | null
 ) {
   if (customerIds.length === 0) return;
-  await prisma.crm_customer.updateMany({
-    where: { id: { in: customerIds } },
-    data: { salesPersonId },
-  });
+  if (!salesPersonId) throw new Error(CRM_ASSIGNEE_MIN_ONE_ERROR);
+
+  for (const customerId of customerIds) {
+    const c = await prisma.crm_customer.findUnique({
+      where: { id: customerId },
+      select: {
+        opportunity: { select: { id: true, leadId: true } },
+      },
+    });
+    if (!c?.opportunity) {
+      await prisma.$transaction(async (tx) => {
+        const dup = await tx.crm_customer_assignee.findUnique({
+          where: {
+            customerId_userId: { customerId, userId: salesPersonId },
+          },
+        });
+        if (dup) return;
+        const beforeCount = await tx.crm_customer_assignee.count({ where: { customerId } });
+        await tx.crm_customer_assignee.create({
+          data: { customerId, userId: salesPersonId },
+        });
+        if (beforeCount === 0) {
+          await tx.crm_customer.update({
+            where: { id: customerId },
+            data: { salesPersonId },
+          });
+        }
+      });
+      continue;
+    }
+    if (c.opportunity.leadId) {
+      await addLeadAssigneeBatch([c.opportunity.leadId], salesPersonId);
+    } else {
+      await addOppCustomerAssigneeWithoutLead(c.opportunity.id, salesPersonId);
+    }
+  }
 }
 
 /** 批量删除客户：先解除跟进记录关联、删掉客户（级联删资料记录），再删除 Vercel Blob 上的资料文件 */
@@ -1397,8 +1625,22 @@ export async function getFollowUps(
       OR: [
         { followUpById: auth.userId },
         { lead: { assignees: { some: { userId: auth.userId } } } },
-        { customer: { salesPersonId: auth.userId } },
-        { opportunity: { salesPersonId: auth.userId } },
+        {
+          customer: {
+            OR: [
+              { salesPersonId: auth.userId },
+              { assignees: { some: { userId: auth.userId } } },
+            ],
+          },
+        },
+        {
+          opportunity: {
+            OR: [
+              { salesPersonId: auth.userId },
+              { assignees: { some: { userId: auth.userId } } },
+            ],
+          },
+        },
       ],
     };
   }
@@ -1519,8 +1761,22 @@ export async function getFollowUpTimeline(
         {
           OR: [
             { lead: { assignees: { some: { userId: auth.userId } } } },
-            { customer: { salesPersonId: auth.userId } },
-            { opportunity: { salesPersonId: auth.userId } },
+            {
+              customer: {
+                OR: [
+                  { salesPersonId: auth.userId },
+                  { assignees: { some: { userId: auth.userId } } },
+                ],
+              },
+            },
+            {
+              opportunity: {
+                OR: [
+                  { salesPersonId: auth.userId },
+                  { assignees: { some: { userId: auth.userId } } },
+                ],
+              },
+            },
           ],
         },
       ],
@@ -1568,8 +1824,18 @@ export async function getFollowUpByIdIfVisible(
       opportunityId: true,
       transitionType: true,
       lead: { select: { assignees: { where: { userId: auth.userId }, select: { userId: true } } } },
-      customer: { select: { salesPersonId: true } },
-      opportunity: { select: { salesPersonId: true } },
+      customer: {
+        select: {
+          salesPersonId: true,
+          assignees: { where: { userId: auth.userId }, select: { userId: true } },
+        },
+      },
+      opportunity: {
+        select: {
+          salesPersonId: true,
+          assignees: { where: { userId: auth.userId }, select: { userId: true } },
+        },
+      },
     },
   });
   if (!row) return null;
@@ -1577,7 +1843,9 @@ export async function getFollowUpByIdIfVisible(
   if (row.followUpById === auth.userId) return row;
   if (row.lead?.assignees?.length) return row;
   if (row.customer?.salesPersonId === auth.userId) return row;
+  if (row.customer?.assignees?.length) return row;
   if (row.opportunity?.salesPersonId === auth.userId) return row;
+  if (row.opportunity?.assignees?.length) return row;
   return null;
 }
 
@@ -1695,7 +1963,6 @@ export async function leadToOpportunity(leadId: string) {
     include: {
       assignees: {
         orderBy: { createdAt: "asc" },
-        take: 1,
         select: { userId: true },
       },
     },
@@ -1706,8 +1973,13 @@ export async function leadToOpportunity(leadId: string) {
   const existing = await prisma.crm_opportunity.findUnique({ where: { leadId } });
   if (existing) throw new Error("该线索已转入商机");
 
+  const assigneeUserIds = lead.assignees.map((a) => a.userId);
+  if (assigneeUserIds.length === 0) {
+    throw new Error("请在线索上指定至少一位负责人后再转入商机");
+  }
+
   const leadRow = lead as { isKeyFocus?: boolean; keyFocusByAdmin?: boolean };
-  const primaryAssigneeId = lead.assignees?.[0]?.userId ?? null;
+  const primaryAssigneeId = assigneeUserIds[0] ?? null;
   const opportunity = await prisma.crm_opportunity.create({
     data: {
       name: lead.customerName,
@@ -1718,6 +1990,9 @@ export async function leadToOpportunity(leadId: string) {
       contactPhone: lead.contactPhone, // 继承线索的联系方式
       isKeyFocus: leadRow.isKeyFocus ?? false,
       keyFocusByAdmin: leadRow.keyFocusByAdmin ?? false,
+      assignees: {
+        create: assigneeUserIds.map((userId) => ({ userId })),
+      },
     },
   });
 
@@ -1728,7 +2003,11 @@ export async function leadToOpportunity(leadId: string) {
 export async function opportunityToCustomer(opportunityId: string) {
   const opp = await prisma.crm_opportunity.findUnique({
     where: { id: opportunityId },
-    include: { customer: true, lead: true },
+    include: {
+      customer: true,
+      lead: true,
+      assignees: { orderBy: { createdAt: "asc" }, select: { userId: true } },
+    },
   });
   if (!opp) throw new Error("商机不存在");
   if (!["待签约", "已赢单"].includes(opp.status)) {
@@ -1740,8 +2019,17 @@ export async function opportunityToCustomer(opportunityId: string) {
   // 继承联系方式：优先使用商机的 contactPhone，否则使用线索的 contactPhone
   const contactPhone = opp.contactPhone ?? lead?.contactPhone ?? null;
 
+  let assigneeUserIds = opp.assignees.map((a) => a.userId);
+  if (assigneeUserIds.length === 0 && opp.salesPersonId) {
+    assigneeUserIds = [opp.salesPersonId];
+  }
+  if (assigneeUserIds.length === 0) {
+    throw new Error("请先在商机上维护至少一位销售负责人后再转入客户");
+  }
+
   const oppRow = opp as { isKeyFocus?: boolean; keyFocusByAdmin?: boolean };
   const isSigned = opp.status === "已赢单";
+  const primaryId = assigneeUserIds[0]!;
   const customer = await prisma.crm_customer.create({
     data: {
       name: lead?.customerName ?? opp.name,
@@ -1749,12 +2037,15 @@ export async function opportunityToCustomer(opportunityId: string) {
       city: lead?.city ?? null,
       industry: lead?.industry ?? null,
       opportunityId: opp.id,
-      salesPersonId: opp.salesPersonId,
+      salesPersonId: primaryId,
       status: isSigned ? "已签约" : "预备签约",
       signedAt: isSigned ? new Date() : null,
       contactPhone,
       isKeyFocus: oppRow.isKeyFocus ?? false,
       keyFocusByAdmin: oppRow.keyFocusByAdmin ?? false,
+      assignees: {
+        create: assigneeUserIds.map((userId) => ({ userId })),
+      },
     },
   });
 
@@ -1942,7 +2233,10 @@ export async function globalSearchCrm(
     };
   }
 
-  const baseWhere = auth.role === "admin" ? {} : salesFilter(auth.userId);
+  const oppAuthWhere =
+    auth.role === "admin" ? {} : opportunitySalesWhere(auth.userId);
+  const custAuthWhere =
+    auth.role === "admin" ? {} : customerSalesWhere(auth.userId);
   const leadBase = buildLeadWhere(auth);
   const planMonth = getCurrentPlanMonth();
 
@@ -1964,6 +2258,11 @@ export async function globalSearchCrm(
     { lostReason: { contains: k, mode: "insensitive" as const } },
     { salesPerson: { name: { contains: k, mode: "insensitive" as const } } },
     { deliveryPerson: { name: { contains: k, mode: "insensitive" as const } } },
+    {
+      assignees: {
+        some: { user: { name: { contains: k, mode: "insensitive" as const } } },
+      },
+    },
   ];
   const orCustomer = [
     { name: { contains: k, mode: "insensitive" as const } },
@@ -1974,12 +2273,26 @@ export async function globalSearchCrm(
     { mainProducts: { contains: k, mode: "insensitive" as const } },
     { tags: { contains: k, mode: "insensitive" as const } },
     { salesPerson: { name: { contains: k, mode: "insensitive" as const } } },
+    {
+      assignees: {
+        some: { user: { name: { contains: k, mode: "insensitive" as const } } },
+      },
+    },
   ];
 
   const leadWhere = { ...leadBase, OR: orLead };
-  const oppWhere = { ...baseWhere, OR: orOpp };
-  const customerWhere = { ...baseWhere, OR: orCustomer };
-  const pendingCustomerWhere = { ...baseWhere, status: "预备签约" as const, OR: orCustomer };
+  const oppWhere: Prisma.crm_opportunityWhereInput =
+    auth.role === "admin"
+      ? { OR: orOpp }
+      : { AND: [oppAuthWhere, { OR: orOpp }] };
+  const customerWhere: Prisma.crm_customerWhereInput =
+    auth.role === "admin"
+      ? { OR: orCustomer }
+      : { AND: [custAuthWhere, { OR: orCustomer }] };
+  const pendingCustomerWhere: Prisma.crm_customerWhereInput =
+    auth.role === "admin"
+      ? { status: "预备签约" as const, OR: orCustomer }
+      : { AND: [custAuthWhere, { status: "预备签约" as const, OR: orCustomer }] };
 
   const mpBaseWhere: Prisma.crm_monthly_plan_leadWhereInput = {
     planMonth,
@@ -1997,8 +2310,22 @@ export async function globalSearchCrm(
           OR: [
             { followUpById: auth.userId },
             { lead: { assignees: { some: { userId: auth.userId } } } },
-            { customer: { salesPersonId: auth.userId } },
-            { opportunity: { salesPersonId: auth.userId } },
+            {
+              customer: {
+                OR: [
+                  { salesPersonId: auth.userId },
+                  { assignees: { some: { userId: auth.userId } } },
+                ],
+              },
+            },
+            {
+              opportunity: {
+                OR: [
+                  { salesPersonId: auth.userId },
+                  { assignees: { some: { userId: auth.userId } } },
+                ],
+              },
+            },
           ],
         }
       : {};

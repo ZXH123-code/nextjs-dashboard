@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getCrmAuth } from "@/app/lib/crm";
+import { canAccessCustomerAsSales, getCrmAuth } from "@/app/lib/crm";
 import { prisma } from "@/app/lib/prisma";
 
 /**
@@ -24,12 +24,16 @@ export async function GET(
 
     const customer = await prisma.crm_customer.findUnique({
       where: { id: customerId },
-      select: { id: true, salesPersonId: true },
+      select: {
+        id: true,
+        salesPersonId: true,
+        assignees: { select: { userId: true } },
+      },
     });
     if (!customer) {
       return NextResponse.json({ error: "客户不存在" }, { status: 404 });
     }
-    if (auth.role !== "admin" && customer.salesPersonId !== auth.userId) {
+    if (!canAccessCustomerAsSales(customer, auth.userId, auth.role)) {
       return NextResponse.json({ error: "无权限查看该客户的资料" }, { status: 403 });
     }
 

@@ -63,9 +63,17 @@ type Opportunity = {
   deliveryPerson: { id: string; name: string } | null;
   lead: { id: string; customerName: string; contactPhone: string | null } | null;
   customer: { id: string; name: string } | null;
+  assignees?: { userId: string; user: { id: string; name: string } }[];
+  /** 用于筛选：多名负责人名称拼接 */
+  salesAssigneeNames?: string;
   isKeyFocus?: boolean;
   keyFocusByAdmin?: boolean;
 };
+
+function opportunityAssigneeIds(opp: Opportunity): string[] {
+  if (opp.assignees?.length) return opp.assignees.map((a) => a.userId);
+  return opp.salesPersonId ? [opp.salesPersonId] : [];
+}
 
 type User = { id: string; name: string };
 
@@ -128,7 +136,7 @@ export function OpportunitiesTable({
     { key: "contactPhone", label: "联系方式", type: "text" },
     { key: "expectedCloseDate", label: "预计成交日期", type: "date" },
     { key: "lostReason", label: "丢单原因", type: "text" },
-    { key: "salesPerson.name", label: "销售人员", type: "text" },
+    { key: "salesAssigneeNames", label: "销售人员", type: "text" },
     { key: "deliveryPerson.name", label: "交付人员", type: "text" },
     { key: "lead.customerName", label: "来源线索", type: "text" },
     { key: "isKeyFocus", label: "重点关注", type: "boolean" },
@@ -139,9 +147,16 @@ export function OpportunitiesTable({
   // 使用筛选 Hook
   const { filteredData, conditions, groups, applyFilter, clearFilter, hasActiveFilters, activeFilterCount } = useFilter(rows, filterFields);
 
-  // 更新 rows 时同步更新筛选结果
   useEffect(() => {
-    setRows(opportunities);
+    setRows(
+      opportunities.map((o) => ({
+        ...o,
+        salesAssigneeNames:
+          o.assignees?.length && o.assignees.length > 0
+            ? o.assignees.map((a) => a.user.name).join("、")
+            : o.salesPerson?.name ?? "",
+      }))
+    );
   }, [opportunities]);
 
   // 自动展开高亮的商机
@@ -199,10 +214,6 @@ export function OpportunitiesTable({
     const [by, order] = value.split("-") as [string, string];
     router.replace(buildUrl({ page: 1, sortBy: by, sortOrder: order }), { scroll: false });
   };
-
-  useEffect(() => {
-    setRows(opportunities);
-  }, [opportunities]);
 
   const handleWriteFollowUp = async (
     data: {
@@ -711,30 +722,48 @@ export function OpportunitiesTable({
                       <OpportunitySalesPersonSelect
                         opportunityId={opp.id}
                         opportunityName={opp.name}
-                        currentSalesPersonId={opp.salesPersonId}
+                        currentAssigneeIds={opportunityAssigneeIds(opp)}
                         users={users}
                         canAssign={isAdmin}
-                        onOptimisticUpdate={(newId) =>
+                        onOptimisticUpdate={(nextIds) =>
                           setRows((prev) =>
                             prev.map((r) =>
                               r.id === opp.id
                                 ? {
                                   ...r,
-                                  salesPersonId: newId ?? null,
-                                  salesPerson: newId ? users.find((u) => u.id === newId) ?? null : null,
+                                  assignees: nextIds.map((id) => ({
+                                    userId: id,
+                                    user: users.find((u) => u.id === id) ?? { id, name: "?" },
+                                  })),
+                                  salesAssigneeNames: nextIds
+                                    .map((id) => users.find((u) => u.id === id)?.name ?? "?")
+                                    .join("、"),
+                                  salesPersonId: nextIds[0] ?? null,
+                                  salesPerson: nextIds[0]
+                                    ? users.find((u) => u.id === nextIds[0]) ?? null
+                                    : null,
                                 }
                                 : r
                             )
                           )
                         }
-                        onRevert={(prevId) =>
+                        onRevert={(prevIds) =>
                           setRows((prev) =>
                             prev.map((r) =>
                               r.id === opp.id
                                 ? {
                                   ...r,
-                                  salesPersonId: prevId ?? null,
-                                  salesPerson: prevId ? users.find((u) => u.id === prevId) ?? null : null,
+                                  assignees: prevIds.map((id) => ({
+                                    userId: id,
+                                    user: users.find((u) => u.id === id) ?? { id, name: "?" },
+                                  })),
+                                  salesAssigneeNames: prevIds
+                                    .map((id) => users.find((u) => u.id === id)?.name ?? "?")
+                                    .join("、"),
+                                  salesPersonId: prevIds[0] ?? null,
+                                  salesPerson: prevIds[0]
+                                    ? users.find((u) => u.id === prevIds[0]) ?? null
+                                    : null,
                                 }
                                 : r
                             )
@@ -943,30 +972,48 @@ export function OpportunitiesTable({
                       <OpportunitySalesPersonSelect
                         opportunityId={opp.id}
                         opportunityName={opp.name}
-                        currentSalesPersonId={opp.salesPersonId}
+                        currentAssigneeIds={opportunityAssigneeIds(opp)}
                         users={users}
                         canAssign={isAdmin}
-                        onOptimisticUpdate={(newId) =>
+                        onOptimisticUpdate={(nextIds) =>
                           setRows((prev) =>
                             prev.map((r) =>
                               r.id === opp.id
                                 ? {
                                   ...r,
-                                  salesPersonId: newId ?? null,
-                                  salesPerson: newId ? users.find((u) => u.id === newId) ?? null : null,
+                                  assignees: nextIds.map((id) => ({
+                                    userId: id,
+                                    user: users.find((u) => u.id === id) ?? { id, name: "?" },
+                                  })),
+                                  salesAssigneeNames: nextIds
+                                    .map((id) => users.find((u) => u.id === id)?.name ?? "?")
+                                    .join("、"),
+                                  salesPersonId: nextIds[0] ?? null,
+                                  salesPerson: nextIds[0]
+                                    ? users.find((u) => u.id === nextIds[0]) ?? null
+                                    : null,
                                 }
                                 : r
                             )
                           )
                         }
-                        onRevert={(prevId) =>
+                        onRevert={(prevIds) =>
                           setRows((prev) =>
                             prev.map((r) =>
                               r.id === opp.id
                                 ? {
                                   ...r,
-                                  salesPersonId: prevId ?? null,
-                                  salesPerson: prevId ? users.find((u) => u.id === prevId) ?? null : null,
+                                  assignees: prevIds.map((id) => ({
+                                    userId: id,
+                                    user: users.find((u) => u.id === id) ?? { id, name: "?" },
+                                  })),
+                                  salesAssigneeNames: prevIds
+                                    .map((id) => users.find((u) => u.id === id)?.name ?? "?")
+                                    .join("、"),
+                                  salesPersonId: prevIds[0] ?? null,
+                                  salesPerson: prevIds[0]
+                                    ? users.find((u) => u.id === prevIds[0]) ?? null
+                                    : null,
                                 }
                                 : r
                             )

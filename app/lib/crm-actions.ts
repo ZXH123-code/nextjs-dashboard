@@ -13,13 +13,29 @@ async function checkCrmPermission(
 ): Promise<boolean> {
   if (!record) return false;
   if (role === "admin") return true;
-  if (record.assigneeIds) return record.assigneeIds.includes(userId);
+  if (record.assigneeIds?.length) return record.assigneeIds.includes(userId);
   return record.salesPersonId === userId;
+}
+
+/** 商机/客户：多负责人 assignee 表 + 主负责人 salesPersonId */
+function crmSalesPermRecord(
+  row: { salesPersonId: string | null; assignees: { userId: string }[] } | null
+) {
+  if (!row) return null;
+  const assigneeIds = row.assignees.map((a) => a.userId);
+  return {
+    salesPersonId: row.salesPersonId,
+    assigneeIds: assigneeIds.length ? assigneeIds : undefined,
+  };
 }
 import {
   createLead,
   createOpportunity,
   createFollowUp,
+  syncDealSalesAssignees,
+  syncOppCustomerAssigneesWithoutLead,
+  normalizeDealAssigneeUserIds,
+  CRM_ASSIGNEE_MIN_ONE_ERROR,
   updateCustomer,
   updateLead,
   updateLeadStatus,
@@ -466,9 +482,9 @@ export async function updateOpportunityStatusAction(
   if (!userId) return;
   const opp = await prisma.crm_opportunity.findUnique({
     where: { id: opportunityId },
-    select: { salesPersonId: true },
+    select: { salesPersonId: true, assignees: { select: { userId: true } } },
   });
-  if (!(await checkCrmPermission(userId, role, opp))) return;
+  if (!(await checkCrmPermission(userId, role, crmSalesPermRecord(opp)))) return;
   await updateOpportunityStatus(opportunityId, status, lostReason);
   if (["待签约", "已赢单"].includes(status)) {
     await opportunityToCustomer(opportunityId);
@@ -493,9 +509,9 @@ export async function updateOpportunityAction(
 
   const opp = await prisma.crm_opportunity.findUnique({
     where: { id: opportunityId },
-    select: { salesPersonId: true },
+    select: { salesPersonId: true, assignees: { select: { userId: true } } },
   });
-  if (!(await checkCrmPermission(userId, role, opp))) {
+  if (!(await checkCrmPermission(userId, role, crmSalesPermRecord(opp)))) {
     return { error: "无权限" };
   }
 
@@ -516,7 +532,6 @@ export async function updateOpportunityAction(
     status: (formData.get("status") as string) || undefined,
     amount,
     expectedCloseDate,
-    salesPersonId: role === "admin" ? ((formData.get("salesPersonId") as string) || undefined) : undefined,
     deliveryPersonId: (formData.get("deliveryPersonId") as string) || undefined,
     contactPhone: contactPhone.trim(),
   });
@@ -526,6 +541,121 @@ export async function updateOpportunityAction(
   revalidatePath("/dashboard");
   const isInline = formData.get("inline") === "1";
   if (!isInline) redirect("/dashboard/crm/opportunities");
+  return {};
+}
+
+/** 管理员：按商机维度全量设置销售负责人（同步线索/客户 assignee 集合） */
+export async function setDealAssigneesByOpportunityAction(
+  opportunityId: string,
+  assigneeIds: string[],
+  followUpContent: string
+): Promise<{ error?: string } | null> {
+  const session = await auth();
+  const userId = (session?.user as { id?: string })?.id;
+  const role = (session?.user as { role?: string })?.role ?? "sales";
+  if (!userId) return { error: "未登录" };
+  if (role !== "admin") return { error: "无权限" };
+
+  const opp = await prisma.crm_opportunity.findUnique({
+    where: { id: opportunityId },
+    select: { leadId: true, name: true },
+  });
+  if (!opp) return { error: "商机不存在" };
+
+  const ids = normalizeDealAssigneeUserIds(assigneeIds);
+  if (ids.length === 0) return { error: CRM_ASSIGNEE_MIN_ONE_ERROR };
+
+  try {
+    if (opp.leadId) {
+      await syncDealSalesAssignees(opp.leadId, ids);
+    } else {
+      await syncOppCustomerAssigneesWithoutLead(opportunityId, ids);
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { error: msg };
+  }
+
+  const content = followUpContent.trim();
+  if (content) {
+    await createFollowUp({
+      content,
+      followUpById: userId,
+      followDate: new Date(),
+      opportunityId,
+      isSystemGenerated: true,
+    });
+  }
+
+  revalidatePath("/dashboard/crm/opportunities");
+  revalidatePath("/dashboard/crm/leads");
+  revalidatePath("/dashboard/crm/customers");
+  revalidatePath("/dashboard/crm/pending-customers");
+  revalidatePath("/dashboard");
+  return {};
+}
+
+/** 管理员：按客户维度全量设置销售负责人（同步整条漏斗） */
+export async function setDealAssigneesByCustomerAction(
+  customerId: string,
+  assigneeIds: string[],
+  followUpContent: string
+): Promise<{ error?: string } | null> {
+  const session = await auth();
+  const userId = (session?.user as { id?: string })?.id;
+  const role = (session?.user as { role?: string })?.role ?? "sales";
+  if (!userId) return { error: "未登录" };
+  if (role !== "admin") return { error: "无权限" };
+
+  const customer = await prisma.crm_customer.findUnique({
+    where: { id: customerId },
+    select: { opportunity: { select: { id: true, leadId: true } } },
+  });
+  if (!customer) return { error: "客户不存在" };
+
+  const ids = normalizeDealAssigneeUserIds(assigneeIds);
+  if (ids.length === 0) return { error: CRM_ASSIGNEE_MIN_ONE_ERROR };
+
+  try {
+    const leadId = customer.opportunity?.leadId;
+    if (leadId) {
+      await syncDealSalesAssignees(leadId, ids);
+    } else if (customer.opportunity?.id) {
+      await syncOppCustomerAssigneesWithoutLead(customer.opportunity.id, ids);
+    } else {
+      await prisma.$transaction(async (tx) => {
+        await tx.crm_customer_assignee.deleteMany({ where: { customerId } });
+        await tx.crm_customer_assignee.createMany({
+          data: ids.map((uid) => ({ customerId, userId: uid })),
+          skipDuplicates: true,
+        });
+        await tx.crm_customer.update({
+          where: { id: customerId },
+          data: { salesPersonId: ids[0]! },
+        });
+      });
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { error: msg };
+  }
+
+  const content = followUpContent.trim();
+  if (content) {
+    await createFollowUp({
+      content,
+      followUpById: userId,
+      followDate: new Date(),
+      customerId,
+      isSystemGenerated: true,
+    });
+  }
+
+  revalidatePath("/dashboard/crm/customers");
+  revalidatePath("/dashboard/crm/pending-customers");
+  revalidatePath("/dashboard/crm/leads");
+  revalidatePath("/dashboard/crm/opportunities");
+  revalidatePath("/dashboard");
   return {};
 }
 
@@ -546,9 +676,9 @@ export async function convertOpportunityToCustomerAction(opportunityId: string) 
   if (!userId) return;
   const opp = await prisma.crm_opportunity.findUnique({
     where: { id: opportunityId },
-    select: { salesPersonId: true },
+    select: { salesPersonId: true, assignees: { select: { userId: true } } },
   });
-  if (!(await checkCrmPermission(userId, role, opp))) return;
+  if (!(await checkCrmPermission(userId, role, crmSalesPermRecord(opp)))) return;
   await opportunityToCustomer(opportunityId);
   revalidatePath("/dashboard/crm/opportunities");
   revalidatePath("/dashboard/crm/customers");
@@ -570,9 +700,9 @@ export async function updateCustomerAction(
 
   const customer = await prisma.crm_customer.findUnique({
     where: { id: customerId },
-    select: { salesPersonId: true },
+    select: { salesPersonId: true, assignees: { select: { userId: true } } },
   });
-  if (!(await checkCrmPermission(userId, role, customer))) {
+  if (!(await checkCrmPermission(userId, role, crmSalesPermRecord(customer)))) {
     return { error: "无权限" };
   }
 
@@ -632,9 +762,9 @@ export async function syncLeadNameToCustomerAction(
 
   const customer = await prisma.crm_customer.findUnique({
     where: { id: customerId },
-    select: { salesPersonId: true },
+    select: { salesPersonId: true, assignees: { select: { userId: true } } },
   });
-  if (!(await checkCrmPermission(userId, role, customer))) {
+  if (!(await checkCrmPermission(userId, role, crmSalesPermRecord(customer)))) {
     return { error: "无权限" };
   }
 
@@ -657,9 +787,9 @@ export async function syncLeadContactPhoneToCustomerAction(
 
   const customer = await prisma.crm_customer.findUnique({
     where: { id: customerId },
-    select: { salesPersonId: true },
+    select: { salesPersonId: true, assignees: { select: { userId: true } } },
   });
-  if (!(await checkCrmPermission(userId, role, customer))) {
+  if (!(await checkCrmPermission(userId, role, crmSalesPermRecord(customer)))) {
     return { error: "无权限" };
   }
 
@@ -670,7 +800,7 @@ export async function syncLeadContactPhoneToCustomerAction(
   return {};
 }
 
-/** 批量指定客户负责人（仅 admin 或当前为客户负责人可操作对应记录） */
+/** 批量追加客户负责人（在现有多负责人基础上追加；仅 admin 或当前为客户负责人可操作对应记录） */
 export async function batchUpdateCustomerSalesPersonAction(
   customerIds: string[],
   salesPersonId: string
@@ -679,15 +809,15 @@ export async function batchUpdateCustomerSalesPersonAction(
   const userId = (session?.user as { id?: string })?.id;
   const role = (session?.user as { role?: string })?.role ?? "sales";
   if (!userId) return { error: "未登录" };
-  if (!customerIds.length) return { error: "请选择要指定的客户" };
+  if (!customerIds.length) return { error: "请选择要追加负责人的客户" };
 
   const customers = await prisma.crm_customer.findMany({
     where: { id: { in: customerIds } },
-    select: { id: true, salesPersonId: true },
+    select: { id: true, salesPersonId: true, assignees: { select: { userId: true } } },
   });
   const allowedIds: string[] = [];
   for (const c of customers) {
-    if (await checkCrmPermission(userId, role, c)) allowedIds.push(c.id);
+    if (await checkCrmPermission(userId, role, crmSalesPermRecord(c))) allowedIds.push(c.id);
   }
   if (allowedIds.length === 0) return { error: "无权限操作所选客户" };
 
@@ -709,11 +839,11 @@ export async function batchDeleteCustomersAction(
 
   const customers = await prisma.crm_customer.findMany({
     where: { id: { in: customerIds } },
-    select: { id: true, salesPersonId: true },
+    select: { id: true, salesPersonId: true, assignees: { select: { userId: true } } },
   });
   const allowedIds: string[] = [];
   for (const c of customers) {
-    if (await checkCrmPermission(userId, role, c)) allowedIds.push(c.id);
+    if (await checkCrmPermission(userId, role, crmSalesPermRecord(c))) allowedIds.push(c.id);
   }
   if (allowedIds.length === 0) return { error: "无权限操作所选客户" };
 
@@ -735,9 +865,9 @@ export async function syncLeadContactPhoneToOpportunityAction(
 
   const opp = await prisma.crm_opportunity.findUnique({
     where: { id: opportunityId },
-    select: { salesPersonId: true },
+    select: { salesPersonId: true, assignees: { select: { userId: true } } },
   });
-  if (!(await checkCrmPermission(userId, role, opp))) {
+  if (!(await checkCrmPermission(userId, role, crmSalesPermRecord(opp)))) {
     return { error: "无权限" };
   }
 
@@ -814,16 +944,20 @@ export async function createFollowUpAction(prevState: { error?: string } | null,
     if (customerId) {
       const customer = await prisma.crm_customer.findUnique({
         where: { id: customerId },
-        select: { salesPersonId: true },
+        select: { salesPersonId: true, assignees: { select: { userId: true } } },
       });
-      if (!customer || customer.salesPersonId !== userId) return { error: "无权限关联该客户" };
+      if (!(await checkCrmPermission(userId, role, crmSalesPermRecord(customer)))) {
+        return { error: "无权限关联该客户" };
+      }
     }
     if (opportunityId) {
       const opp = await prisma.crm_opportunity.findUnique({
         where: { id: opportunityId },
-        select: { salesPersonId: true },
+        select: { salesPersonId: true, assignees: { select: { userId: true } } },
       });
-      if (!opp || opp.salesPersonId !== userId) return { error: "无权限关联该商机" };
+      if (!(await checkCrmPermission(userId, role, crmSalesPermRecord(opp)))) {
+        return { error: "无权限关联该商机" };
+      }
     }
   }
 
@@ -924,6 +1058,7 @@ export async function setLeadAssigneesWithFollowUpAction(
 
   const oldIds = new Set(lead.assignees.map((a) => a.userId));
   const newIds = Array.from(new Set((assigneeIds ?? []).filter(Boolean)));
+  if (newIds.length === 0) return { error: CRM_ASSIGNEE_MIN_ONE_ERROR };
 
   try {
     await setLeadAssignees(leadId, newIds);
@@ -968,21 +1103,21 @@ export async function setLeadAssigneesWithFollowUpAction(
   }
 
   revalidatePath("/dashboard/crm/leads");
+  revalidatePath("/dashboard/crm/opportunities");
+  revalidatePath("/dashboard/crm/customers");
+  revalidatePath("/dashboard/crm/pending-customers");
   revalidatePath("/dashboard");
   return { success: true };
 }
 
-/** 兼容旧接口：单负责人选择（会覆盖为 0 或 1 个负责人） */
+/** 兼容旧接口：单负责人选择（会覆盖为 1 个负责人） */
 export async function updateLeadSalesPersonWithFollowUpAction(
   leadId: string,
   salesPersonId: string | null,
   followUpContent: string
 ) {
-  return setLeadAssigneesWithFollowUpAction(
-    leadId,
-    salesPersonId ? [salesPersonId] : [],
-    followUpContent
-  );
+  if (!salesPersonId) return { error: CRM_ASSIGNEE_MIN_ONE_ERROR };
+  return setLeadAssigneesWithFollowUpAction(leadId, [salesPersonId], followUpContent);
 }
 
 function decodeLeadFilter(filterParam: string | undefined): LeadFilter | undefined {
@@ -1180,9 +1315,14 @@ export async function updateOpportunityStatusWithFollowUpAction(
 
   const opp = await prisma.crm_opportunity.findUnique({
     where: { id: opportunityId },
-    select: { salesPersonId: true, status: true, customer: { select: { id: true } } },
+    select: {
+      salesPersonId: true,
+      status: true,
+      customer: { select: { id: true } },
+      assignees: { select: { userId: true } },
+    },
   });
-  if (!(await checkCrmPermission(userId, role, opp))) {
+  if (!(await checkCrmPermission(userId, role, crmSalesPermRecord(opp)))) {
     return { error: "无权限" };
   }
 
@@ -1240,9 +1380,9 @@ export async function updateCustomerStatusWithFollowUpAction(
 
   const customer = await prisma.crm_customer.findUnique({
     where: { id: customerId },
-    select: { salesPersonId: true },
+    select: { salesPersonId: true, assignees: { select: { userId: true } } },
   });
-  if (!(await checkCrmPermission(userId, role, customer))) {
+  if (!(await checkCrmPermission(userId, role, crmSalesPermRecord(customer)))) {
     return { error: "无权限" };
   }
 
@@ -1300,16 +1440,20 @@ export async function createManualFollowUpAction(data: {
     if (data.customerId) {
       const customer = await prisma.crm_customer.findUnique({
         where: { id: data.customerId },
-        select: { salesPersonId: true },
+        select: { salesPersonId: true, assignees: { select: { userId: true } } },
       });
-      if (!customer || customer.salesPersonId !== userId) return { error: "无权限关联该客户" };
+      if (!(await checkCrmPermission(userId, role, crmSalesPermRecord(customer)))) {
+        return { error: "无权限关联该客户" };
+      }
     }
     if (data.opportunityId) {
       const opp = await prisma.crm_opportunity.findUnique({
         where: { id: data.opportunityId },
-        select: { salesPersonId: true },
+        select: { salesPersonId: true, assignees: { select: { userId: true } } },
       });
-      if (!opp || opp.salesPersonId !== userId) return { error: "无权限关联该商机" };
+      if (!(await checkCrmPermission(userId, role, crmSalesPermRecord(opp)))) {
+        return { error: "无权限关联该商机" };
+      }
     }
   }
 

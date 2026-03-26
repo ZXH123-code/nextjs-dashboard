@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { put } from "@vercel/blob";
-import { getCrmAuth } from "@/app/lib/crm";
+import { canAccessCustomerAsSales, getCrmAuth } from "@/app/lib/crm";
 import { prisma } from "@/app/lib/prisma";
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
@@ -36,12 +36,16 @@ export async function POST(
 
     const customer = await prisma.crm_customer.findUnique({
       where: { id: customerId },
-      select: { id: true, salesPersonId: true },
+      select: {
+        id: true,
+        salesPersonId: true,
+        assignees: { select: { userId: true } },
+      },
     });
     if (!customer) {
       return NextResponse.json({ error: "客户不存在" }, { status: 404 });
     }
-    if (auth.role !== "admin" && customer.salesPersonId !== auth.userId) {
+    if (!canAccessCustomerAsSales(customer, auth.userId, auth.role)) {
       return NextResponse.json({ error: "无权限为该客户上传资料" }, { status: 403 });
     }
 

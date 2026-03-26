@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { setDealAssigneesByOpportunityAction } from "@/app/lib/crm-actions";
+import { setDealAssigneesByCustomerAction } from "@/app/lib/crm-actions";
 import { useAlert } from "@/hooks/use-alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -18,18 +18,17 @@ import { LoadingSpinner } from "@/app/ui/loading-spinner";
 
 type User = { id: string; name: string };
 
-export function OpportunitySalesPersonSelect({
-  opportunityId,
-  opportunityName,
+export function CustomerSalesAssigneesSelect({
+  customerId,
+  customerName,
   currentAssigneeIds,
   users,
   canAssign = true,
   onOptimisticUpdate,
   onRevert,
 }: {
-  opportunityId: string;
-  opportunityName: string;
-  /** 与线索/客户保持一致的销售负责人 id 列表（有序，首位为主负责人） */
+  customerId: string;
+  customerName: string;
   currentAssigneeIds: string[];
   users: User[];
   canAssign?: boolean;
@@ -55,14 +54,12 @@ export function OpportunitySalesPersonSelect({
 
   if (!canAssign) {
     return (
-      <>
-        <span
-          className="text-muted-foreground text-xs max-w-[140px] inline-block truncate"
-          title={currentNames.join("、")}
-        >
-          {buttonLabel}
-        </span>
-      </>
+      <span
+        className="text-muted-foreground text-xs max-w-[140px] inline-block truncate"
+        title={currentNames.join("、")}
+      >
+        {buttonLabel}
+      </span>
     );
   }
 
@@ -96,15 +93,15 @@ export function OpportunitySalesPersonSelect({
     setIsDialogOpen(false);
     setIsSubmitting(true);
     try {
-      const result = await setDealAssigneesByOpportunityAction(opportunityId, nextIds, content);
+      const result = await setDealAssigneesByCustomerAction(customerId, nextIds, content);
       if (result?.error) {
         onRevert?.(previousIds);
         showAlert(result.error, { type: "error", title: "更新失败" });
       } else {
-        showAlert("销售负责人已更新（已同步线索与客户）", { type: "success", title: "已保存" });
+        showAlert("销售负责人已更新（已同步线索与商机）", { type: "success", title: "已保存" });
       }
     } catch (error) {
-      console.error("更新商机负责人失败:", error);
+      console.error("更新客户负责人失败:", error);
       onRevert?.(previousIds);
       showAlert("更新失败，已恢复原负责人", { type: "error", title: "更新失败" });
     } finally {
@@ -138,17 +135,15 @@ export function OpportunitySalesPersonSelect({
           <DialogHeader>
             <DialogTitle>销售负责人</DialogTitle>
             <DialogDescription>
-              与线索、客户共用同一套负责人；首位为主负责人。将自动生成默认跟进说明，可在下方补充。
+              与线索、商机共用同一套负责人；首位为主负责人。
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-2">
-            <p className="text-xs text-muted-foreground truncate" title={opportunityName}>
-              商机：{opportunityName}
+            <p className="text-xs text-muted-foreground truncate" title={customerName}>
+              客户：{customerName}
             </p>
             <div className="grid gap-2">
-              <div className="flex items-center justify-between gap-2">
-                <Label className="text-muted-foreground">默认跟进说明</Label>
-              </div>
+              <Label className="text-muted-foreground">默认跟进说明</Label>
               <div
                 className={cn(
                   "rounded-md border px-3 py-2 text-sm border-input bg-muted/40 text-foreground"
@@ -189,13 +184,13 @@ export function OpportunitySalesPersonSelect({
               </div>
             </div>
             <div className="grid gap-2">
-              <Label htmlFor="opp-assign-supplement">补充说明（选填）</Label>
+              <Label htmlFor="cust-assign-supplement">补充说明（选填）</Label>
               <textarea
-                id="opp-assign-supplement"
+                id="cust-assign-supplement"
                 value={supplement}
                 onChange={(e) => setSupplement(e.target.value)}
                 rows={3}
-                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                 disabled={isSubmitting}
               />
             </div>

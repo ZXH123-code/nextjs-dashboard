@@ -7,6 +7,7 @@ import { useAlert } from "@/hooks/use-alert";
 import { useFilter } from "@/hooks/use-filter";
 import { FilterDialog, type FilterField } from "@/components/ui/filter-dialog";
 import { CustomerStatusSelect } from "./CustomerStatusSelect";
+import { CustomerSalesAssigneesSelect } from "./CustomerSalesAssigneesSelect";
 import { CustomerMaterialsSheet } from "./CustomerMaterialsSheet";
 import { FollowUpTimeline } from "../components/FollowUpTimeline";
 import { WriteFollowUpDialog } from "../components/WriteFollowUpDialog";
@@ -59,11 +60,20 @@ type Customer = {
   contactPhone: string | null;
   salesPersonId: string | null;
   salesPerson: { id: string; name: string } | null;
+  assignees?: { userId: string; user: { id: string; name: string } }[];
+  salesAssigneeNames?: string;
   opportunity: { id: string; name: string; lead: { id: string; contactPhone: string | null; customerTier: string | null } | null } | null;
   createdAt: Date;
   isKeyFocus?: boolean;
   keyFocusByAdmin?: boolean;
 };
+
+type UserOption = { id: string; name: string };
+
+function customerAssigneeIds(c: Customer): string[] {
+  if (c.assignees?.length) return c.assignees.map((a) => a.userId);
+  return c.salesPersonId ? [c.salesPersonId] : [];
+}
 
 type EditingState = { customerId: string; field: string; value: string };
 
@@ -78,6 +88,7 @@ export function CustomersTable({
   sortOrder,
   /** 默认排序选项，如 { value: "createdAt-desc", label: "默认（创建时间新→旧）" } */
   defaultSortOption,
+  users = [],
 }: {
   customers: Customer[];
   currentUserRole?: string;
@@ -88,6 +99,7 @@ export function CustomersTable({
   sortBy?: string;
   sortOrder?: string;
   defaultSortOption?: { value: string; label: string };
+  users?: UserOption[];
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -127,7 +139,7 @@ export function CustomersTable({
     { key: "status", label: "状态", type: "select", options: CUSTOMER_STATUS.map(s => ({ value: s, label: s })) },
     { key: "actualAmount", label: "实际成交金额", type: "number" },
     { key: "contactPhone", label: "联系方式", type: "text" },
-    { key: "salesPerson.name", label: "销售人员", type: "text" },
+    { key: "salesAssigneeNames", label: "销售人员", type: "text" },
     { key: "opportunity.name", label: "来源商机", type: "text" },
     { key: "isKeyFocus", label: "重点关注", type: "boolean" },
     { key: "keyFocusByAdmin", label: "管理员标注", type: "boolean" },
@@ -139,9 +151,16 @@ export function CustomersTable({
   // 使用筛选 Hook
   const { filteredData, conditions, groups, applyFilter, clearFilter, hasActiveFilters, activeFilterCount } = useFilter(rows, filterFields);
 
-  // 更新 rows 时同步更新筛选结果
   useEffect(() => {
-    setRows(customers);
+    setRows(
+      customers.map((c) => ({
+        ...c,
+        salesAssigneeNames:
+          c.assignees?.length && c.assignees.length > 0
+            ? c.assignees.map((a) => a.user.name).join("、")
+            : c.salesPerson?.name ?? "",
+      }))
+    );
   }, [customers]);
 
   useEffect(() => {
@@ -371,7 +390,10 @@ export function CustomersTable({
   };
 
   const canEditCustomer = (customer: Customer) =>
-    isAdmin || (currentUserId != null && customer.salesPersonId === currentUserId);
+    isAdmin ||
+    (currentUserId != null &&
+      (customer.salesPersonId === currentUserId ||
+        customer.assignees?.some((a) => a.userId === currentUserId)));
 
   /** 与线索表一致的列内文案最大宽度（截断显示） */
   const getFieldTextMaxWidthClass = (field: string) => {
@@ -680,12 +702,57 @@ export function CustomersTable({
                       )}
                     </td>
                     <td className="px-4 py-3">
-                      <span
-                        className="inline-block w-full min-w-0 max-w-[130px] truncate whitespace-nowrap align-middle"
-                        title={customer.salesPerson?.name ?? ""}
-                      >
-                        {customer.salesPerson?.name ?? "-"}
-                      </span>
+                      <CustomerSalesAssigneesSelect
+                        customerId={customer.id}
+                        customerName={customer.name}
+                        currentAssigneeIds={customerAssigneeIds(customer)}
+                        users={users}
+                        canAssign={!!isAdmin}
+                        onOptimisticUpdate={(nextIds) =>
+                          setRows((prev) =>
+                            prev.map((r) =>
+                              r.id === customer.id
+                                ? {
+                                    ...r,
+                                    assignees: nextIds.map((id) => ({
+                                      userId: id,
+                                      user: users.find((u) => u.id === id) ?? { id, name: "?" },
+                                    })),
+                                    salesAssigneeNames: nextIds
+                                      .map((id) => users.find((u) => u.id === id)?.name ?? "?")
+                                      .join("、"),
+                                    salesPersonId: nextIds[0] ?? null,
+                                    salesPerson: nextIds[0]
+                                      ? users.find((u) => u.id === nextIds[0]) ?? null
+                                      : null,
+                                  }
+                                : r
+                            )
+                          )
+                        }
+                        onRevert={(prevIds) =>
+                          setRows((prev) =>
+                            prev.map((r) =>
+                              r.id === customer.id
+                                ? {
+                                    ...r,
+                                    assignees: prevIds.map((id) => ({
+                                      userId: id,
+                                      user: users.find((u) => u.id === id) ?? { id, name: "?" },
+                                    })),
+                                    salesAssigneeNames: prevIds
+                                      .map((id) => users.find((u) => u.id === id)?.name ?? "?")
+                                      .join("、"),
+                                    salesPersonId: prevIds[0] ?? null,
+                                    salesPerson: prevIds[0]
+                                      ? users.find((u) => u.id === prevIds[0]) ?? null
+                                      : null,
+                                  }
+                                : r
+                            )
+                          )
+                        }
+                      />
                     </td>
                     <td className="px-4 py-3">
                       <CustomerStatusSelect
@@ -892,7 +959,57 @@ export function CustomersTable({
                   <div className="space-y-1.5 text-left">
                     <div className="text-xs font-medium text-muted-foreground">销售人员</div>
                     <div className="min-h-[32px] flex items-center text-sm justify-start text-left w-full max-w-sm pl-1">
-                      <span>{customer.salesPerson?.name ?? "-"}</span>
+                      <CustomerSalesAssigneesSelect
+                        customerId={customer.id}
+                        customerName={customer.name}
+                        currentAssigneeIds={customerAssigneeIds(customer)}
+                        users={users}
+                        canAssign={!!isAdmin}
+                        onOptimisticUpdate={(nextIds) =>
+                          setRows((prev) =>
+                            prev.map((r) =>
+                              r.id === customer.id
+                                ? {
+                                    ...r,
+                                    assignees: nextIds.map((id) => ({
+                                      userId: id,
+                                      user: users.find((u) => u.id === id) ?? { id, name: "?" },
+                                    })),
+                                    salesAssigneeNames: nextIds
+                                      .map((id) => users.find((u) => u.id === id)?.name ?? "?")
+                                      .join("、"),
+                                    salesPersonId: nextIds[0] ?? null,
+                                    salesPerson: nextIds[0]
+                                      ? users.find((u) => u.id === nextIds[0]) ?? null
+                                      : null,
+                                  }
+                                : r
+                            )
+                          )
+                        }
+                        onRevert={(prevIds) =>
+                          setRows((prev) =>
+                            prev.map((r) =>
+                              r.id === customer.id
+                                ? {
+                                    ...r,
+                                    assignees: prevIds.map((id) => ({
+                                      userId: id,
+                                      user: users.find((u) => u.id === id) ?? { id, name: "?" },
+                                    })),
+                                    salesAssigneeNames: prevIds
+                                      .map((id) => users.find((u) => u.id === id)?.name ?? "?")
+                                      .join("、"),
+                                    salesPersonId: prevIds[0] ?? null,
+                                    salesPerson: prevIds[0]
+                                      ? users.find((u) => u.id === prevIds[0]) ?? null
+                                      : null,
+                                  }
+                                : r
+                            )
+                          )
+                        }
+                      />
                     </div>
                   </div>
                   <div className="space-y-1.5 text-left">
