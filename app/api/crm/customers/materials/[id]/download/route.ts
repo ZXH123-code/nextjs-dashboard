@@ -57,12 +57,15 @@ export async function GET(
       where: { id },
       include: {
         customer: {
-          select: { salesPersonId: true, assignees: { select: { userId: true } } },
+          select: { departmentId: true, salesPersonId: true, assignees: { select: { userId: true } } },
         },
       },
     });
     if (!material) {
       return new NextResponse("资料不存在", { status: 404 });
+    }
+    if (auth.departmentId && material.customer.departmentId !== auth.departmentId) {
+      return new NextResponse("无权限下载该资料", { status: 403 });
     }
     if (!canAccessCustomerAsSales(material.customer, auth.userId, auth.role)) {
       return new NextResponse("无权限下载该资料", { status: 403 });

@@ -35,7 +35,7 @@ export async function POST(
     }
 
     const customer = await prisma.crm_customer.findUnique({
-      where: { id: customerId },
+      where: { id: customerId, ...(auth.departmentId ? { departmentId: auth.departmentId } : {}) },
       select: {
         id: true,
         salesPersonId: true,

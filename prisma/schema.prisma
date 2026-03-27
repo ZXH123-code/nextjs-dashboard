@@ -15,7 +15,9 @@ model users {
   email    String  @unique
   password String
   role     String? @default("sales") @db.VarChar(20) // admin=销售总管看全部, sales=销售人员只看自己的
+  departmentId String @default(dbgenerated("'00000000-0000-0000-0000-000000000001'::uuid")) @map("department_id") @db.Uuid
 
+  department department @relation(fields: [departmentId], references: [id])
   crm_lead_assignees              crm_lead_assignee[]
   crm_opportunity_assignees       crm_opportunity_assignee[]
   crm_customer_assignees          crm_customer_assignee[]
@@ -29,6 +31,21 @@ model users {
   crm_lead_notifications_created  crm_lead_assignment_notification[] @relation("notification_creator")
   crm_customer_materials_uploaded crm_customer_material[]
   crm_monthly_plan_leads          crm_monthly_plan_lead[]
+
+  @@index([departmentId])
+}
+
+model department {
+  id   String @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  name String @unique @db.VarChar(100)
+
+  users                      users[]
+  crm_leads                  crm_lead[]
+  crm_opportunities          crm_opportunity[]
+  crm_customers              crm_customer[]
+  crm_lead_assignees         crm_lead_assignee[]
+  crm_opportunity_assignees  crm_opportunity_assignee[]
+  crm_customer_assignees     crm_customer_assignee[]
 }
 
 /// 注册/找回密码等场景的邮箱验证码，单次有效、15 分钟过期
@@ -50,6 +67,7 @@ model email_verification_code {
 /// 线索管理：总池子来源，状态更新后可转入商机
 model crm_lead {
   id              String   @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  departmentId    String   @default(dbgenerated("'00000000-0000-0000-0000-000000000001'::uuid")) @map("department_id") @db.Uuid
   customerName    String   @map("customer_name") @db.VarChar(255)
   nickname        String?  @db.VarChar(100)
   /// 主要联系人姓名（如“张三”、“李总”），用于和客户名称区分
@@ -76,6 +94,7 @@ model crm_lead {
 
   deletedAt DateTime? @map("deleted_at") @db.Timestamp(6) // 软删除时间，null 表示未删除
 
+  department              department @relation(fields: [departmentId], references: [id])
   assignees               crm_lead_assignee[]
   opportunity             crm_opportunity?
   followUps               crm_follow_up[] // 该线索下的所有跟进记录
@@ -83,6 +102,7 @@ model crm_lead {
   monthlyPlanEntries      crm_monthly_plan_lead[] // 本月计划（同一条线索可加入多人）
 
   @@index([status])
+  @@index([departmentId])
   @@map("crm_leads")
 }
 
@@ -107,14 +127,17 @@ model crm_monthly_plan_lead {
 model crm_lead_assignee {
   leadId    String   @map("lead_id") @db.Uuid
   userId    String   @map("user_id") @db.Uuid
+  departmentId String @default(dbgenerated("'00000000-0000-0000-0000-000000000001'::uuid")) @map("department_id") @db.Uuid
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamp(6)
 
-  lead crm_lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
-  user users    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lead       crm_lead    @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  user       users       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  department department  @relation(fields: [departmentId], references: [id])
 
   @@id([leadId, userId])
   @@index([userId])
   @@index([leadId])
+  @@index([departmentId])
   @@map("crm_lead_assignees")
 }
 
@@ -122,14 +145,17 @@ model crm_lead_assignee {
 model crm_opportunity_assignee {
   opportunityId String   @map("opportunity_id") @db.Uuid
   userId        String   @map("user_id") @db.Uuid
+  departmentId  String   @default(dbgenerated("'00000000-0000-0000-0000-000000000001'::uuid")) @map("department_id") @db.Uuid
   createdAt     DateTime @default(now()) @map("created_at") @db.Timestamp(6)
 
   opportunity crm_opportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
   user        users           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  department  department      @relation(fields: [departmentId], references: [id])
 
   @@id([opportunityId, userId])
   @@index([userId])
   @@index([opportunityId])
+  @@index([departmentId])
   @@map("crm_opportunity_assignees")
 }
 
@@ -137,20 +163,24 @@ model crm_opportunity_assignee {
 model crm_customer_assignee {
   customerId String   @map("customer_id") @db.Uuid
   userId     String   @map("user_id") @db.Uuid
+  departmentId String @default(dbgenerated("'00000000-0000-0000-0000-000000000001'::uuid")) @map("department_id") @db.Uuid
   createdAt  DateTime @default(now()) @map("created_at") @db.Timestamp(6)
 
-  customer crm_customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
-  user     users        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  customer   crm_customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  user       users        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  department department   @relation(fields: [departmentId], references: [id])
 
   @@id([customerId, userId])
   @@index([userId])
   @@index([customerId])
+  @@index([departmentId])
   @@map("crm_customer_assignees")
 }
 
 /// 商机管理：来源于线索（有意向时转入），状态更新后可转入客户
 model crm_opportunity {
   id                String    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  departmentId      String    @default(dbgenerated("'00000000-0000-0000-0000-000000000001'::uuid")) @map("department_id") @db.Uuid
   name              String    @db.VarChar(255)
   leadId            String?   @unique @map("lead_id") @db.Uuid
   productType       String?   @map("product_type") @db.VarChar(100)
@@ -165,14 +195,16 @@ model crm_opportunity {
   isKeyFocus        Boolean   @default(false) @map("is_key_focus") // 从线索继承
   keyFocusByAdmin   Boolean   @default(false) @map("key_focus_by_admin") // 从线索继承，admin 标为蓝星
 
-  lead           crm_lead?       @relation(fields: [leadId], references: [id])
-  salesPerson    users?          @relation("opportunity_sales", fields: [salesPersonId], references: [id])
-  deliveryPerson users?          @relation("opportunity_delivery", fields: [deliveryPersonId], references: [id])
+  lead           crm_lead?                  @relation(fields: [leadId], references: [id])
+  department     department                 @relation(fields: [departmentId], references: [id])
+  salesPerson    users?                     @relation("opportunity_sales", fields: [salesPersonId], references: [id])
+  deliveryPerson users?                     @relation("opportunity_delivery", fields: [deliveryPersonId], references: [id])
   assignees      crm_opportunity_assignee[]
   customer       crm_customer?
   followUps      crm_follow_up[]
 
   @@index([status])
+  @@index([departmentId])
   @@index([salesPersonId])
   @@index([leadId])
   @@map("crm_opportunities")
@@ -181,6 +213,7 @@ model crm_opportunity {
 /// 客户管理：来源于商机（待签约/已赢单时转入）
 model crm_customer {
   id                   String    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  departmentId         String    @default(dbgenerated("'00000000-0000-0000-0000-000000000001'::uuid")) @map("department_id") @db.Uuid
   name                 String    @db.VarChar(255)
   nickname             String?   @db.VarChar(100)
   city                 String?   @db.VarChar(100)
@@ -200,12 +233,14 @@ model crm_customer {
   keyFocusByAdmin      Boolean   @default(false) @map("key_focus_by_admin") // 从商机/线索继承，admin 标为蓝星
 
   opportunity crm_opportunity?        @relation(fields: [opportunityId], references: [id])
+  department  department              @relation(fields: [departmentId], references: [id])
   salesPerson users?                  @relation(fields: [salesPersonId], references: [id])
   assignees   crm_customer_assignee[]
   followUps   crm_follow_up[]
   materials   crm_customer_material[]
 
   @@index([status])
+  @@index([departmentId])
   @@index([salesPersonId])
   @@index([opportunityId])
   @@index([createdAt])

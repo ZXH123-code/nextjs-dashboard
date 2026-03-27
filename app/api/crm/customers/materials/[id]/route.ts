@@ -27,12 +27,15 @@ export async function DELETE(
       where: { id },
       include: {
         customer: {
-          select: { salesPersonId: true, assignees: { select: { userId: true } } },
+          select: { departmentId: true, salesPersonId: true, assignees: { select: { userId: true } } },
         },
       },
     });
     if (!material) {
       return NextResponse.json({ error: "资料不存在" }, { status: 404 });
+    }
+    if (auth.departmentId && material.customer.departmentId !== auth.departmentId) {
+      return NextResponse.json({ error: "无权限删除该资料" }, { status: 403 });
     }
     if (!canAccessCustomerAsSales(material.customer, auth.userId, auth.role)) {
       return NextResponse.json({ error: "无权限删除该资料" }, { status: 403 });
