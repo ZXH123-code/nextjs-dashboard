@@ -2191,6 +2191,7 @@ export async function opportunityToCustomer(opportunityId: string) {
   const primaryId = assigneeUserIds[0]!;
   const customer = await prisma.crm_customer.create({
     data: {
+      departmentId: opp.departmentId,
       name: lead?.customerName ?? opp.name,
       nickname: lead?.nickname ?? null,
       city: lead?.city ?? null,
@@ -2203,7 +2204,10 @@ export async function opportunityToCustomer(opportunityId: string) {
       isKeyFocus: oppRow.isKeyFocus ?? false,
       keyFocusByAdmin: oppRow.keyFocusByAdmin ?? false,
       assignees: {
-        create: assigneeUserIds.map((userId) => ({ userId })),
+        create: assigneeUserIds.map((userId) => ({
+          userId,
+          departmentId: opp.departmentId,
+        })),
       },
     },
   });

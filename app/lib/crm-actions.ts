@@ -491,6 +491,7 @@ export async function updateOpportunityStatusAction(
   }
   revalidatePath("/dashboard/crm/opportunities");
   revalidatePath("/dashboard/crm/customers");
+  revalidatePath("/dashboard/crm/pending-customers");
   revalidatePath("/dashboard");
 }
 
@@ -682,6 +683,7 @@ export async function convertOpportunityToCustomerAction(opportunityId: string) 
   await opportunityToCustomer(opportunityId);
   revalidatePath("/dashboard/crm/opportunities");
   revalidatePath("/dashboard/crm/customers");
+  revalidatePath("/dashboard/crm/pending-customers");
   revalidatePath("/dashboard");
 }
 
@@ -1363,6 +1365,7 @@ export async function updateOpportunityStatusWithFollowUpAction(
 
   revalidatePath("/dashboard/crm/opportunities");
   revalidatePath("/dashboard/crm/customers");
+  revalidatePath("/dashboard/crm/pending-customers");
   revalidatePath("/dashboard");
   return { success: true };
 }
