@@ -1491,12 +1491,9 @@ export async function updateFollowUpAction(
     status?: string;
   }
 ) {
-  const session: { user?: { id?: string; role?: string } } | null = await auth();
-  const userId = (session?.user as { id?: string })?.id ?? "";
-  const role = (session?.user as { role?: string })?.role ?? "sales";
-  if (!userId) return { error: "未登录" };
-
-  const crmAuth = { userId, role: role as "admin" | "sales" };
+  const crmAuth = await getCrmAuth();
+  if (!crmAuth) return { error: "未登录" };
+  const { userId, role } = crmAuth;
   const row = await getFollowUpByIdIfVisible(crmAuth, id);
   if (!row) return { error: "跟进不存在或无权限" };
   if (role !== "admin" && row.followUpById !== userId) return { error: "仅管理员或该条跟进创建者可编辑" };
@@ -1519,11 +1516,9 @@ export async function updateFollowUpAction(
 
 /** 删除跟进记录：仅管理员或该条创建者可删；状态变更记录不可删（保留链条），请用编辑修正 */
 export async function deleteFollowUpAction(id: string) {
-  const session: { user?: { id?: string; role?: string } } | null = await auth();
-  const userId = (session?.user as { id?: string })?.id ?? "";
-  const role = (session?.user as { role?: string })?.role ?? "sales";
-  const crmAuth = userId && role ? { userId, role: role as "admin" | "sales" } : null;
+  const crmAuth = await getCrmAuth();
   if (!crmAuth) return { error: "请先登录" };
+  const { userId, role } = crmAuth;
 
   const row = await getFollowUpByIdIfVisible(crmAuth, id);
   if (!row) return { error: "跟进不存在或无权限" };
