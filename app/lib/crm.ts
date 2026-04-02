@@ -1844,7 +1844,19 @@ export async function getFollowUpTimeline(
 
   let contentWhere: Record<string, unknown> = {};
   if (filters.leadId) {
-    contentWhere.leadId = filters.leadId;
+    // 查找线索关联的商机
+    const lead = await prisma.crm_lead.findUnique({
+      where: { id: filters.leadId },
+      select: { opportunity: { select: { id: true } } },
+    });
+    if (lead?.opportunity?.id) {
+      contentWhere.OR = [
+        { leadId: filters.leadId },
+        { opportunityId: lead.opportunity.id },
+      ];
+    } else {
+      contentWhere.leadId = filters.leadId;
+    }
   } else if (filters.customerId) {
     const customer = await prisma.crm_customer.findUnique({
       where: { id: filters.customerId },
