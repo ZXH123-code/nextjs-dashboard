@@ -2,6 +2,8 @@ import SideNav from "@/app/ui/dashboard/sidenav";
 import TopBar from "@/app/ui/dashboard/topbar";
 import { auth } from "@/auth";
 import { Watermark } from "@/components/ui/watermark";
+import { getCrmAuth } from "@/app/lib/crm";
+import { isWeeklyProgressDepartment } from "@/app/lib/crm-weekly-progress-config";
 
 /** 使用 auth() 会读 headers，必须动态渲染 */
 export const dynamic = "force-dynamic";
@@ -13,6 +15,9 @@ export default async function Layout({ children }: { children: React.ReactNode }
   const userEmail = session?.user?.email ?? "";
   const userId = (session?.user as { id?: string })?.id ?? "";
 
+  const crmAuth = await getCrmAuth();
+  const showWeeklyProgress = isWeeklyProgressDepartment(crmAuth?.departmentId);
+
   // 组合水印文本：名字 + 邮箱
   const watermarkText = userEmail ? `${userName} ${userEmail}` : userName;
 
@@ -23,7 +28,7 @@ export default async function Layout({ children }: { children: React.ReactNode }
 
       {/* 侧边栏容器 - 允许内容溢出以显示折叠按钮 */}
       <div className="w-full flex-none md:w-auto overflow-visible z-50">
-        <SideNav role={role} />
+        <SideNav role={role} showWeeklyProgress={showWeeklyProgress} />
       </div>
 
       {/* 主内容区 */}

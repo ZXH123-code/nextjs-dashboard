@@ -18,7 +18,13 @@ export const SidebarContext = createContext<{
 
 export const useSidebar = () => useContext(SidebarContext);
 
-export default function SideNav({ role = "sales" }: { role?: string }) {
+export default function SideNav({
+  role = "sales",
+  showWeeklyProgress = false,
+}: {
+  role?: string;
+  showWeeklyProgress?: boolean;
+}) {
   const [collapsed, setCollapsed] = useState(false);
   // 水合前与首帧统一按「展开」渲染，避免服务端/客户端 HTML 不一致导致 Hydration 报错
   const [mounted, setMounted] = useState(false);
@@ -78,7 +84,11 @@ export default function SideNav({ role = "sales" }: { role?: string }) {
 
           {/* 导航链接区域 - 允许弹出菜单溢出 */}
           <div className="flex-1 overflow-y-auto overflow-x-visible sidebar-scroll py-2">
-            <NavLinks collapsed={effectiveCollapsed} role={role} />
+            <NavLinks
+              collapsed={effectiveCollapsed}
+              role={role}
+              showWeeklyProgress={showWeeklyProgress}
+            />
           </div>
 
           {/* Footer 区域 */}

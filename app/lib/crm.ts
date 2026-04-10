@@ -2681,3 +2681,235 @@ export async function globalSearchCrm(
     followUps: { items: followUpItems, total: followUpsCount },
   };
 }
+
+// ============ 本周跟进（汇报视图，仅部分部门使用）============
+
+/** 本地日历周：周一 00:00 至下周一 00:00（不含） */
+function getLocalCalendarWeekBounds(): { weekStart: Date; weekEndExclusive: Date } {
+  const now = new Date();
+  const dow = now.getDay();
+  const offsetMonday = dow === 0 ? -6 : 1 - dow;
+  const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() + offsetMonday, 0, 0, 0, 0);
+  const nextMonday = new Date(monday);
+  nextMonday.setDate(monday.getDate() + 7);
+  return { weekStart: monday, weekEndExclusive: nextMonday };
+}
+
+const weeklyProgressLeadInclude = {
+  assignees: {
+    orderBy: { createdAt: "asc" as const },
+    include: { user: { select: { id: true, name: true } } },
+  },
+  opportunity: {
+    select: { id: true, name: true, customer: { select: { id: true, status: true } } },
+  },
+  followUps: {
+    orderBy: { createdAt: "desc" as const },
+    take: 1,
+    select: {
+      id: true,
+      summary: true,
+      content: true,
+      followDate: true,
+      createdAt: true,
+      updatedAt: true,
+      contactPerson: true,
+      nextStep: true,
+      customerNeeds: true,
+      status: true,
+      isSystemGenerated: true,
+      followUpBy: { select: { name: true } },
+    },
+  },
+} satisfies Prisma.crm_leadInclude;
+
+export type WeeklyProgressLeadItem = Prisma.crm_leadGetPayload<{
+  include: typeof weeklyProgressLeadInclude;
+}>;
+
+function buildWeeklyFollowUpThisWeekWhere(): Prisma.crm_follow_upWhereInput {
+  const { weekStart, weekEndExclusive } = getLocalCalendarWeekBounds();
+  return {
+    OR: [
+      { followDate: { gte: weekStart, lt: weekEndExclusive } },
+      { createdAt: { gte: weekStart, lt: weekEndExclusive } },
+    ],
+  };
+}
+
+/** 本周跟进页：单条跟进展示（含录入人） */
+export type WeeklyProgressFollowUpRow = {
+  id: string;
+  leadId: string;
+  summary: string | null;
+  content: string;
+  followDate: Date;
+  createdAt: Date;
+  authorName: string;
+};
+
+async function fetchFollowUpsThisWeekByLeadId(
+  auth: CrmAuth,
+  leadIds: string[]
+): Promise<Record<string, WeeklyProgressFollowUpRow[]>> {
+  const empty: Record<string, WeeklyProgressFollowUpRow[]> = {};
+  if (!auth || leadIds.length === 0) return empty;
+  const { weekStart, weekEndExclusive } = getLocalCalendarWeekBounds();
+  const rows = await prisma.crm_follow_up.findMany({
+    where: {
+      leadId: { in: leadIds },
+      OR: [
+        { followDate: { gte: weekStart, lt: weekEndExclusive } },
+        { createdAt: { gte: weekStart, lt: weekEndExclusive } },
+      ],
+      lead: { is: buildLeadWhere(auth, false) },
+    },
+    // 本周时间线：按录入时间从新到旧（与「最新跟进」语义一致）
+    orderBy: [{ createdAt: "desc" as const }, { followDate: "desc" as const }],
+    select: {
+      id: true,
+      leadId: true,
+      summary: true,
+      content: true,
+      followDate: true,
+      createdAt: true,
+      followUpBy: { select: { name: true } },
+    },
+  });
+
+  const map: Record<string, WeeklyProgressFollowUpRow[]> = {};
+  for (const r of rows) {
+    if (!r.leadId) continue;
+    const authorName = r.followUpBy?.name?.trim() || "—";
+    const item: WeeklyProgressFollowUpRow = {
+      id: r.id,
+      leadId: r.leadId,
+      summary: r.summary,
+      content: r.content,
+      followDate: r.followDate,
+      createdAt: r.createdAt,
+      authorName,
+    };
+    if (!map[r.leadId]) map[r.leadId] = [];
+    map[r.leadId].push(item);
+  }
+  return map;
+}
+
+/** 列表：与线索管理相同权限范围，附带最新一条跟进；可选仅本周有跟进的线索；并返回各线索本周全部跟进 */
+export async function getLeadsForWeeklyProgress(
+  auth: CrmAuth,
+  options: { weekOnly: boolean }
+): Promise<{
+  items: WeeklyProgressLeadItem[];
+  total: number;
+  followUpsThisWeekByLeadId: Record<string, WeeklyProgressFollowUpRow[]>;
+}> {
+  const baseWhere = buildLeadWhere(auth, false);
+  const weekFollowWhere = buildWeeklyFollowUpThisWeekWhere();
+  const where: Prisma.crm_leadWhereInput = options.weekOnly
+    ? {
+        ...baseWhere,
+        followUps: { some: { ...weekFollowWhere } },
+      }
+    : baseWhere;
+
+  const orderBy: Prisma.crm_leadOrderByWithRelationInput[] = [
+    { isKeyFocus: "desc" as const },
+    { createdAt: "desc" as const },
+  ];
+
+  const [items, total] = await Promise.all([
+    prisma.crm_lead.findMany({
+      where,
+      orderBy,
+      include: weeklyProgressLeadInclude,
+    }),
+    prisma.crm_lead.count({ where }),
+  ]);
+
+  const typed = items as WeeklyProgressLeadItem[];
+  const leadIds = typed.map((l) => l.id);
+  const followUpsThisWeekByLeadId = await fetchFollowUpsThisWeekByLeadId(auth, leadIds);
+
+  return { items: typed, total, followUpsThisWeekByLeadId };
+}
+
+/** 顶部统计：线索总数、本周有跟进的线索数、本周跟进记录条数（部门范围内） */
+export async function getWeeklyProgressStats(auth: CrmAuth): Promise<{
+  leadTotal: number;
+  leadsWithFollowUpThisWeek: number;
+  followUpsThisWeekCount: number;
+}> {
+  const baseWhere = buildLeadWhere(auth, false);
+  const weekFollowWhere = buildWeeklyFollowUpThisWeekWhere();
+  const { weekStart, weekEndExclusive } = getLocalCalendarWeekBounds();
+  const [leadTotal, leadsWithFollowUpThisWeek, followUpsThisWeekCount] = await Promise.all([
+    prisma.crm_lead.count({ where: baseWhere }),
+    prisma.crm_lead.count({
+      where: {
+        ...baseWhere,
+        followUps: { some: { ...weekFollowWhere } },
+      },
+    }),
+    prisma.crm_follow_up.count({
+      where: {
+        leadId: { not: null },
+        OR: [
+          { followDate: { gte: weekStart, lt: weekEndExclusive } },
+          { createdAt: { gte: weekStart, lt: weekEndExclusive } },
+        ],
+        lead: { is: baseWhere },
+      },
+    }),
+  ]);
+  return { leadTotal, leadsWithFollowUpThisWeek, followUpsThisWeekCount };
+}
+
+/** 侧栏「补本周跟进」：轻量线索列表（搜索客户名/简称/商机名） */
+export type CatchUpLeadRow = {
+  id: string;
+  customerName: string;
+  nickname: string | null;
+  opportunityName: string | null;
+};
+
+export async function getLeadsForCatchUpList(
+  auth: CrmAuth,
+  options: { search?: string; take?: number } = {}
+): Promise<CatchUpLeadRow[]> {
+  if (!auth?.departmentId) return [];
+  const take = Math.min(100, Math.max(1, options.take ?? 60));
+  const kw = options.search?.trim() ?? "";
+  const base = buildLeadWhere(auth, false);
+  const where: Prisma.crm_leadWhereInput =
+    kw.length > 0
+      ? {
+          ...base,
+          OR: [
+            { customerName: { contains: kw, mode: "insensitive" as const } },
+            { nickname: { contains: kw, mode: "insensitive" as const } },
+            { opportunity: { is: { name: { contains: kw, mode: "insensitive" as const } } } },
+          ],
+        }
+      : base;
+
+  const rows = await prisma.crm_lead.findMany({
+    where,
+    select: {
+      id: true,
+      customerName: true,
+      nickname: true,
+      opportunity: { select: { name: true } },
+    },
+    orderBy: [{ isKeyFocus: "desc" as const }, { createdAt: "desc" as const }],
+    take,
+  });
+
+  return rows.map((r) => ({
+    id: r.id,
+    customerName: r.customerName,
+    nickname: r.nickname,
+    opportunityName: r.opportunity?.name?.trim() || null,
+  }));
+}

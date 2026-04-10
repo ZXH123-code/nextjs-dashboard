@@ -86,26 +86,25 @@ export function LeadStatusSelect({
   return (
     <>
       <AlertComponent />
-      <Select
-        value={currentStatus}
-        onValueChange={handleStatusChange}
-      >
-        <SelectTrigger
-          className={cn(
-            "h-8 min-w-[60px] text-xs font-medium border-0 shadow-none",
-            getStatusColor(currentStatus)
-          )}
-        >
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          {STATUS_OPTIONS.map((status) => (
-            <SelectItem key={status} value={status}>
-              {status}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+      <div className="flex w-full justify-center">
+        <Select value={currentStatus} onValueChange={handleStatusChange}>
+          <SelectTrigger
+            className={cn(
+              "h-8 w-[5.5rem] max-w-full shrink-0 px-2 text-xs font-medium border-0 shadow-none",
+              getStatusColor(currentStatus)
+            )}
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {STATUS_OPTIONS.map((status) => (
+              <SelectItem key={status} value={status}>
+                {status}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
 
       <StatusChangeDialog
         isOpen={isDialogOpen}

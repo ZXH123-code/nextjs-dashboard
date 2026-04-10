@@ -13,6 +13,8 @@ import {
   getMonthlyPlanStats,
 } from "@/app/lib/crm";
 import { lusitana } from "@/app/ui/fonts";
+import Link from "next/link";
+import { isWeeklyProgressDepartment } from "@/app/lib/crm-weekly-progress-config";
 
 export default async function Page() {
   let leadCount = 0,
@@ -22,8 +24,10 @@ export default async function Page() {
     pendingCustomerCount = 0;
   let monthlyPlanStats = { total: 0, contacted: 0, opportunityCount: 0, customerCount: 0 };
   let chartData = null;
+  let showWeeklyProgress = false;
   try {
     const auth = await getCrmAuth();
+    showWeeklyProgress = isWeeklyProgressDepartment(auth?.departmentId);
     const [counts, charts, mpStats] = await Promise.all([
       getCrmCounts(auth),
       getCrmDashboardCharts(auth),
@@ -86,6 +90,20 @@ export default async function Page() {
         <FunnelChart title="本月漏斗" data={monthlyFunnelData} />
         <FunnelChart title="历史漏斗" data={historyFunnelData} />
       </div>
+
+      {showWeeklyProgress && (
+        <div className="mt-6 rounded-xl border border-border bg-card p-4">
+          <Link
+            href="/dashboard/crm/weekly-progress"
+            className="font-medium text-primary underline-offset-4 hover:underline"
+          >
+            本周跟进（汇报视图）
+          </Link>
+          <p className="mt-1 text-sm text-muted-foreground">
+            按周查看线索评级与最新跟进摘要，便于周会汇报。
+          </p>
+        </div>
+      )}
 
       <div className="mt-6 rounded-xl bg-gray-50 p-6">
         <p className="text-muted-foreground">

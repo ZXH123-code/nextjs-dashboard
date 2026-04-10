@@ -60,6 +60,7 @@ import {
   globalSearchCrm,
   getLeadIds,
   getPageForNewLead,
+  getLeadsForCatchUpList,
 } from "./crm";
 import type { LeadFilter } from "./crm";
 import { sendLeadAssignmentNotification } from "./email";
@@ -982,6 +983,71 @@ export async function createFollowUpAction(prevState: { error?: string } | null,
   return { success: true, followUpId: created.id };
 }
 
+/** 最简跟进：仅内容 + 线索，跟进日为当天，summary/联系人等留空（与正式跟进的 content 字段一致） */
+export async function createQuickLeadFollowUpAction(
+  leadId: string,
+  content: string
+): Promise<{ success?: true; error?: string }> {
+  const trimmed = content?.trim();
+  if (!trimmed) return { error: "请填写跟进内容" };
+  const id = leadId?.trim();
+  if (!id) return { error: "线索无效" };
+
+  const session = await auth();
+  const userId = (session?.user as { id?: string })?.id;
+  if (!userId) return { error: "未登录" };
+
+  let role = (session?.user as { role?: string })?.role ?? "sales";
+  try {
+    const dbUser = await prisma.users.findUnique({
+      where: { id: userId },
+      select: { role: true },
+    });
+    if (dbUser?.role) role = dbUser.role;
+  } catch {
+    /* 使用 session role */
+  }
+
+  const crmAuth = await getCrmAuth();
+  if (!crmAuth?.departmentId) return { error: "无部门信息" };
+
+  const lead = await prisma.crm_lead.findFirst({
+    where: { id, deletedAt: null, departmentId: crmAuth.departmentId },
+    select: {
+      id: true,
+      assignees: { where: { userId }, select: { userId: true } },
+    },
+  });
+  if (!lead) return { error: "线索不存在或无权访问" };
+  if (role !== "admin" && lead.assignees.length === 0) {
+    return { error: "无权限为该线索写跟进" };
+  }
+
+  const today = new Date();
+  const followDate = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+
+  await createFollowUp({
+    content: trimmed,
+    followUpById: userId,
+    followDate,
+    leadId: id,
+  });
+
+  revalidatePath("/dashboard/crm/weekly-progress");
+  revalidatePath("/dashboard/crm/follow-ups");
+  revalidatePath("/dashboard/crm/leads");
+  revalidatePath("/dashboard");
+
+  return { success: true };
+}
+
+/** 本周跟进侧栏：可搜索的线索列表，用于补写跟进 */
+export async function getLeadsForCatchUpListAction(search: string) {
+  const auth = await getCrmAuth();
+  if (!auth) return [];
+  return getLeadsForCatchUpList(auth, { search });
+}
+
 // ============ 跟进记录增强：状态变更时自动创建 ============
 
 /** 线索状态变更时创建跟进记录（前端传入补充说明） */
@@ -1036,6 +1102,7 @@ export async function updateLeadStatusWithFollowUpAction(
 
   revalidatePath("/dashboard/crm/leads");
   revalidatePath("/dashboard/crm/opportunities");
+  revalidatePath("/dashboard/crm/monthly-plan");
   revalidatePath("/dashboard");
   return { success: true };
 }
@@ -1478,6 +1545,7 @@ export async function createManualFollowUpAction(data: {
   revalidatePath("/dashboard/crm/customers");
   revalidatePath("/dashboard/crm/opportunities");
   revalidatePath("/dashboard/crm/follow-ups");
+  revalidatePath("/dashboard/crm/monthly-plan");
   return { success: true, followUpId: created.id };
 }
 

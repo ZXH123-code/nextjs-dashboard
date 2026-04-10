@@ -1,11 +1,17 @@
 "use client";
 
-import { Fragment, useState, useMemo } from "react";
+import { Fragment, useState, useMemo, useEffect } from "react";
 import Link from "next/link";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { Pagination } from "@/components/ui/pagination";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { FilterDialog, type FilterField, type FilterCondition, type FilterGroup } from "@/components/ui/filter-dialog";
 import {
   Select,
@@ -14,8 +20,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Star, Circle, Clock, CheckCircle, XCircle, Minus, ArrowRight, Building2, ExternalLink, ChevronDown, ChevronUp, FileText, Filter, X, ArrowUpDown } from "lucide-react";
+import { Star, Circle, CheckCircle, Minus, ArrowRight, Building2, ExternalLink, ChevronDown, ChevronUp, FileText, Filter, X, ArrowUpDown, MessageSquarePlus, MoreHorizontal } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useAlert } from "@/hooks/use-alert";
+import { createManualFollowUpAction } from "@/app/lib/crm-actions";
+import { LeadStatusSelect } from "../leads/LeadStatusSelect";
+import { WriteFollowUpDialog } from "../components/WriteFollowUpDialog";
 import { FollowUpTimeline } from "../components/FollowUpTimeline";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { SheetScrollArea } from "@/components/ui/sheet-scroll-area";
@@ -37,26 +47,6 @@ function getLeadFieldValue(lead: MonthlyPlanLeadItem, field: string): string {
     case "remark": return lead.remark ?? "";
     default: return "";
   }
-}
-
-function StatusBadge({ status }: { status: string }) {
-  const config = {
-    未跟进: { icon: Circle, variant: "outline" as const, iconClass: "text-muted-foreground/80" },
-    跟进中: { icon: Clock, variant: "secondary" as const, iconClass: "text-blue-600/80" },
-    有意向: { icon: CheckCircle, variant: "default" as const, iconClass: "text-primary-foreground/90" },
-    无意向: { icon: XCircle, variant: "secondary" as const, iconClass: "text-muted-foreground/80" },
-  };
-  const { icon: Icon, variant, iconClass } = config[status as keyof typeof config] ?? {
-    icon: Circle,
-    variant: "secondary" as const,
-    iconClass: "text-muted-foreground/80",
-  };
-  return (
-    <Badge variant={variant} className="inline-flex items-center gap-1.5 text-xs">
-      <Icon className={cn("h-3.5 w-3.5 shrink-0", iconClass)} />
-      {status}
-    </Badge>
-  );
 }
 
 function ConversionBadge({ status }: { status: "未转化" | "已转商机" | "已转客户" }) {
@@ -106,10 +96,73 @@ export function MonthlyPlanTable({
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const { showAlert, AlertComponent } = useAlert();
+  const [rows, setRows] = useState<MonthlyPlanLeadItem[]>(items);
   const [expandedLeadIds, setExpandedLeadIds] = useState<Set<string>>(new Set());
   const [followUpRefreshKeys, setFollowUpRefreshKeys] = useState<Record<string, number>>({});
   const [detailLeadId, setDetailLeadId] = useState<string | null>(null);
   const [filterOpen, setFilterOpen] = useState(false);
+  const [writeFollowUpLeadId, setWriteFollowUpLeadId] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  useEffect(() => {
+    setRows(items);
+  }, [items]);
+
+  const handleWriteFollowUp = async (
+    data: {
+      content: string;
+      contactPerson?: string;
+      summary?: string;
+      nextStep?: string;
+      customerNeeds?: string;
+    },
+    files?: File[]
+  ) => {
+    if (!writeFollowUpLeadId) return;
+
+    setIsSubmitting(true);
+    try {
+      const result = await createManualFollowUpAction({
+        leadId: writeFollowUpLeadId,
+        ...data,
+      });
+      if (result?.error) {
+        showAlert(result.error, { type: "error", title: "操作失败" });
+        return;
+      }
+      const followUpId = (result as { followUpId?: string })?.followUpId;
+      if (followUpId && files?.length) {
+        for (const file of files) {
+          const formData = new FormData();
+          formData.set("file", file);
+          const res = await fetch(
+            `/api/crm/follow-ups/${followUpId}/images/upload`,
+            { method: "POST", body: formData }
+          );
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            showAlert(err.error ?? "上传图片失败", { type: "error", title: "操作失败" });
+            return;
+          }
+        }
+      }
+      const leadIdJustSubmitted = writeFollowUpLeadId;
+      setWriteFollowUpLeadId(null);
+      setFollowUpRefreshKeys((prev) => ({
+        ...prev,
+        [leadIdJustSubmitted]: (prev[leadIdJustSubmitted] ?? 0) + 1,
+      }));
+      router.refresh();
+    } catch (error) {
+      console.error("添加跟进记录失败:", error);
+      showAlert("添加跟进记录失败", { type: "error", title: "操作失败" });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const currentWriteFollowUpLead = rows.find((l) => l.id === writeFollowUpLeadId);
 
   const filterFields: FilterField[] = [
     { key: "customerName", label: "客户名称", type: "text" },
@@ -186,6 +239,7 @@ export function MonthlyPlanTable({
 
   return (
     <div className="space-y-6">
+      <AlertComponent />
       {isAdmin && statsByUser.length > 0 && (
         <section>
           <h2 className="mb-3 text-base font-semibold text-foreground">人员汇总</h2>
@@ -288,29 +342,29 @@ export function MonthlyPlanTable({
           onClear={handleClearFilter}
         />
         <div className="rounded-lg border overflow-x-auto">
-          <table className="min-w-[920px] w-full text-sm">
+          <table className="min-w-[958px] w-full table-fixed text-sm">
             <thead className="border-b bg-muted/50">
               <tr>
                 <th className="w-[160px] px-4 py-3 text-center font-medium">客户名称</th>
-                <th className="w-[70px] px-4 py-3 text-center font-medium">城市</th>
-                <th className="w-[80px] px-4 py-3 text-center font-medium">行业</th>
-                <th className="w-[90px] px-4 py-3 text-center font-medium">线索来源</th>
-                <th className="w-[90px] px-4 py-3 text-center font-medium">状态</th>
-                <th className="w-[80px] px-4 py-3 text-center font-medium" title="本月是否有跟进记录">本月已联系</th>
+                <th className="w-[72px] px-4 py-3 text-center font-medium">城市</th>
+                <th className="w-[88px] px-4 py-3 text-center font-medium">行业</th>
+                <th className="w-[100px] px-4 py-3 text-center font-medium">线索来源</th>
+                <th className="w-[110px] px-4 py-3 text-center font-medium">状态</th>
+                <th className="w-[72px] px-4 py-3 text-center font-medium" title="本月是否有跟进记录">本月已联系</th>
                 <th className="w-[100px] px-4 py-3 text-center font-medium">转化状态</th>
-                <th className="w-[110px] px-4 py-3 text-center font-medium">负责人</th>
-                <th className="w-[140px] px-4 py-3 text-center font-medium">操作</th>
+                <th className="w-[118px] px-4 py-3 text-center font-medium">负责人</th>
+                <th className="w-[148px] px-2 py-3 text-center font-medium">操作</th>
               </tr>
             </thead>
             <tbody>
-              {items.length === 0 ? (
+              {rows.length === 0 ? (
                 <tr>
                   <td colSpan={9} className="px-4 py-8 text-center text-muted-foreground">
                     暂无本月计划线索，请在线索管理表中勾选后右键「分配至本月计划」
                   </td>
                 </tr>
               ) : (
-                items.map((lead) => (
+                rows.map((lead) => (
                   <Fragment key={lead.id}>
                     <tr className="border-b last:border-0 hover:bg-muted/30">
                       <td className="px-4 py-3 text-center">
@@ -345,7 +399,23 @@ export function MonthlyPlanTable({
                         </span>
                       </td>
                       <td className="px-4 py-3 text-center">
-                        <StatusBadge status={lead.status} />
+                        <LeadStatusSelect
+                          leadId={lead.id}
+                          currentStatus={lead.status}
+                          onOptimisticUpdate={(newStatus) =>
+                            setRows((prev) =>
+                              prev.map((r) => (r.id === lead.id ? { ...r, status: newStatus } : r))
+                            )
+                          }
+                          onRevert={(prevStatus) =>
+                            setRows((prev) =>
+                              prev.map((r) => (r.id === lead.id ? { ...r, status: prevStatus } : r))
+                            )
+                          }
+                          onSuccess={() => {
+                            router.refresh();
+                          }}
+                        />
                       </td>
                       <td className="px-4 py-3 text-center" title={lead.hasFollowUpThisMonth ? "本月已有跟进记录" : "本月尚未联系"}>
                         {lead.hasFollowUpThisMonth ? (
@@ -360,35 +430,43 @@ export function MonthlyPlanTable({
                       <td className="px-4 py-3 text-center text-muted-foreground">
                         {lead.assignees?.map((a) => a.user.name).join("、") ?? "-"}
                       </td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center justify-center gap-2">
+                      <td className="px-4 py-3 text-center">
+                        <div className="flex items-center justify-center gap-1">
                           <Button
                             size="sm"
                             variant="ghost"
-                            className="h-8 gap-1.5 text-muted-foreground hover:text-foreground"
-                            onClick={() => toggleExpandedLead(lead.id)}
+                            className="h-7 gap-1 px-1.5 text-xs text-muted-foreground hover:text-foreground"
+                            onClick={() => setWriteFollowUpLeadId(lead.id)}
                           >
-                            {expandedLeadIds.has(lead.id) ? (
-                              <>
-                                <ChevronUp className="h-4 w-4" />
-                                收起时间线
-                              </>
-                            ) : (
-                              <>
-                                <ChevronDown className="h-4 w-4" />
-                                展开时间线
-                              </>
-                            )}
+                            <MessageSquarePlus className="h-3.5 w-3.5" />
+                            写跟进
                           </Button>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="h-8 gap-1.5 text-muted-foreground hover:text-foreground"
-                            onClick={() => setDetailLeadId(lead.id)}
-                          >
-                            <FileText className="h-4 w-4" />
-                            查看详情
-                          </Button>
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="h-7 gap-0.5 px-1.5 text-xs text-muted-foreground hover:text-foreground"
+                              >
+                                <MoreHorizontal className="h-3.5 w-3.5 shrink-0" />
+                                更多
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <DropdownMenuItem onClick={() => setDetailLeadId(lead.id)}>
+                                <FileText className="mr-2 h-4 w-4" />
+                                查看详情
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onClick={() => toggleExpandedLead(lead.id)}>
+                                {expandedLeadIds.has(lead.id) ? (
+                                  <ChevronUp className="mr-2 h-4 w-4" />
+                                ) : (
+                                  <ChevronDown className="mr-2 h-4 w-4" />
+                                )}
+                                {expandedLeadIds.has(lead.id) ? "收起跟进时间线" : "展开跟进时间线"}
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
                         </div>
                       </td>
                     </tr>
@@ -430,7 +508,7 @@ export function MonthlyPlanTable({
       <Sheet open={!!detailLeadId} onOpenChange={(open) => !open && setDetailLeadId(null)}>
         <SheetContent side="right" className="flex flex-col overflow-hidden">
           {(() => {
-            const lead = detailLeadId ? items.find((l) => l.id === detailLeadId) : null;
+            const lead = detailLeadId ? rows.find((l) => l.id === detailLeadId) : null;
             if (!lead) return null;
             const detailRows: { key: string; label: string }[] = [
               { key: "customerName", label: "客户名称" },
@@ -450,8 +528,19 @@ export function MonthlyPlanTable({
             ];
             return (
               <>
-                <SheetHeader className="shrink-0 border-b pb-3 text-left">
-                  <SheetTitle>线索详情 · {lead.customerName}</SheetTitle>
+                <SheetHeader className="shrink-0 space-y-3 border-b pb-3 text-left">
+                  <div className="flex flex-wrap items-start justify-between gap-2 pr-8">
+                    <SheetTitle className="text-left">线索详情 · {lead.customerName}</SheetTitle>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-8 shrink-0 gap-1.5"
+                      onClick={() => setWriteFollowUpLeadId(lead.id)}
+                    >
+                      <MessageSquarePlus className="h-3.5 w-3.5" />
+                      写跟进
+                    </Button>
+                  </div>
                 </SheetHeader>
                 <SheetScrollArea>
                   {detailRows.map(({ key, label }) => (
@@ -473,7 +562,23 @@ export function MonthlyPlanTable({
                           </span>
                         )}
                         {key === "status" && (
-                          <StatusBadge status={lead.status} />
+                          <LeadStatusSelect
+                            leadId={lead.id}
+                            currentStatus={lead.status}
+                            onOptimisticUpdate={(newStatus) =>
+                              setRows((prev) =>
+                                prev.map((r) => (r.id === lead.id ? { ...r, status: newStatus } : r))
+                              )
+                            }
+                            onRevert={(prevStatus) =>
+                              setRows((prev) =>
+                                prev.map((r) => (r.id === lead.id ? { ...r, status: prevStatus } : r))
+                              )
+                            }
+                            onSuccess={() => {
+                              router.refresh();
+                            }}
+                          />
                         )}
                         {!["createdAt", "assignees", "status"].includes(key) && (
                           <span className="text-foreground">
@@ -536,6 +641,17 @@ export function MonthlyPlanTable({
           })()}
         </SheetContent>
       </Sheet>
+
+      {currentWriteFollowUpLead && (
+        <WriteFollowUpDialog
+          isOpen
+          onClose={() => setWriteFollowUpLeadId(null)}
+          onConfirm={handleWriteFollowUp}
+          recordType="线索"
+          recordName={currentWriteFollowUpLead.customerName}
+          isSubmitting={isSubmitting}
+        />
+      )}
 
       {total > 0 && (
         <Pagination

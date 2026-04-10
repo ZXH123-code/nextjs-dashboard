@@ -32,7 +32,21 @@ interface NavLinkGroup {
 }
 
 // 导航链接分组 - CRM 简易系统（权限管理仅 admin 可见，由 NavLinks 动态注入）
-function getNavGroups(role: string): NavLinkGroup[] {
+function getNavGroups(role: string, showWeeklyProgress: boolean): NavLinkGroup[] {
+  const crmSubLinks: SubLink[] = [
+    { name: "客户管理表", href: "/dashboard/crm/customers" },
+    { name: "待签约客户管理表", href: "/dashboard/crm/pending-customers" },
+    { name: "商机管理表", href: "/dashboard/crm/opportunities" },
+    { name: "本月计划", href: "/dashboard/crm/monthly-plan" },
+  ];
+  if (showWeeklyProgress) {
+    crmSubLinks.push({ name: "本周跟进", href: "/dashboard/crm/weekly-progress" });
+  }
+  crmSubLinks.push(
+    { name: "线索管理表", href: "/dashboard/crm/leads" },
+    { name: "跟进记录", href: "/dashboard/crm/follow-ups" }
+  );
+
   const groups: NavLinkGroup[] = [
     {
       header: "核心看板",
@@ -50,15 +64,7 @@ function getNavGroups(role: string): NavLinkGroup[] {
         {
           name: "CRM 模块",
           icon: Users,
-          // 漏斗自上而下：已签约 → 待签约 → 商机 → 本月计划 → 线索 → 跟进记录
-          subLinks: [
-            { name: "客户管理表", href: "/dashboard/crm/customers" },
-            { name: "待签约客户管理表", href: "/dashboard/crm/pending-customers" },
-            { name: "商机管理表", href: "/dashboard/crm/opportunities" },
-            { name: "本月计划", href: "/dashboard/crm/monthly-plan" },
-            { name: "线索管理表", href: "/dashboard/crm/leads" },
-            { name: "跟进记录", href: "/dashboard/crm/follow-ups" },
-          ],
+          subLinks: crmSubLinks,
         },
       ],
     },
@@ -74,6 +80,7 @@ function getNavGroups(role: string): NavLinkGroup[] {
   }
   return groups;
 }
+
 
 // Badge 组件
 function Badge({ text, type }: { text: string; type: "primary" | "secondary" }) {
@@ -392,8 +399,16 @@ function NavLinkItem({
 }
 
 // 导出主组件
-export default function NavLinks({ collapsed = false, role = "sales" }: { collapsed?: boolean; role?: string }) {
-  const navGroups = getNavGroups(role);
+export default function NavLinks({
+  collapsed = false,
+  role = "sales",
+  showWeeklyProgress = false,
+}: {
+  collapsed?: boolean;
+  role?: string;
+  showWeeklyProgress?: boolean;
+}) {
+  const navGroups = getNavGroups(role, showWeeklyProgress);
   return (
     <nav className="menu">
       <ul className="list-none p-0 m-0">
