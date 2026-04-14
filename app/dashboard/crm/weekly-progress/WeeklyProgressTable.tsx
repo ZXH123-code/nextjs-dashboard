@@ -27,24 +27,44 @@ import { cn } from "@/lib/utils";
 /** 与本地日历日一致：0=周日 … 6=周六 */
 const WEEKDAY_ZH = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"] as const;
 
+const CHINA_TZ = "Asia/Shanghai" as const;
+
+function getChinaWeekdayIndex(date: Date): 0 | 1 | 2 | 3 | 4 | 5 | 6 {
+  const w = new Intl.DateTimeFormat("en-US", { timeZone: CHINA_TZ, weekday: "short" }).format(date);
+  const map: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  const idx = map[w];
+  return (idx ?? 0) as 0 | 1 | 2 | 3 | 4 | 5 | 6;
+}
+
 function formatWeekdayZh(d: Date): string {
-  return WEEKDAY_ZH[new Date(d).getDay()];
+  return WEEKDAY_ZH[getChinaWeekdayIndex(new Date(d))];
 }
 
 function formatDate(d: Date): string {
-  const x = new Date(d);
-  const y = x.getFullYear();
-  const m = String(x.getMonth() + 1).padStart(2, "0");
-  const day = String(x.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: CHINA_TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date(d));
 }
 
 function formatDateTime(d: Date): string {
-  const x = new Date(d);
-  const date = formatDate(x);
-  const hh = String(x.getHours()).padStart(2, "0");
-  const mm = String(x.getMinutes()).padStart(2, "0");
-  return `${date} ${hh}:${mm}`;
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: CHINA_TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(new Date(d));
+  const y = parts.find((p) => p.type === "year")?.value ?? "0000";
+  const m = parts.find((p) => p.type === "month")?.value ?? "00";
+  const day = parts.find((p) => p.type === "day")?.value ?? "00";
+  const hh = parts.find((p) => p.type === "hour")?.value ?? "00";
+  const mm = parts.find((p) => p.type === "minute")?.value ?? "00";
+  return `${y}-${m}-${day} ${hh}:${mm}`;
 }
 
 function followBody(f: { summary: string | null; content: string }): string {

@@ -25,24 +25,52 @@ function getSingleParam(value: string | string[] | undefined): string | undefine
   return value;
 }
 
-function formatDate(date: Date): string {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const d = String(date.getDate()).padStart(2, "0");
-  return `${y}-${m}-${d}`;
+const CHINA_TZ = "Asia/Shanghai" as const;
+
+function formatChinaDate(date: Date): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: CHINA_TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
 }
 
 function addDays(date: Date, days: number): Date {
-  const next = new Date(date);
-  next.setDate(next.getDate() + days);
-  return next;
+  return new Date(date.getTime() + days * 24 * 60 * 60 * 1000);
+}
+
+function getChinaYmdParts(date: Date): { y: number; m: number; d: number } {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: CHINA_TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const y = Number(parts.find((p) => p.type === "year")?.value);
+  const m = Number(parts.find((p) => p.type === "month")?.value);
+  const d = Number(parts.find((p) => p.type === "day")?.value);
+  return { y, m, d };
+}
+
+function chinaMidnightToUtcDate(y: number, m: number, d: number): Date {
+  return new Date(Date.UTC(y, m - 1, d, -8, 0, 0, 0));
+}
+
+function getChinaWeekdayIndex(date: Date): 0 | 1 | 2 | 3 | 4 | 5 | 6 {
+  const w = new Intl.DateTimeFormat("en-US", { timeZone: CHINA_TZ, weekday: "short" }).format(date);
+  const map: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  const idx = map[w];
+  return (idx ?? 0) as 0 | 1 | 2 | 3 | 4 | 5 | 6;
 }
 
 function getCurrentWeekStart(): Date {
   const now = new Date();
-  const dow = now.getDay();
+  const { y, m, d } = getChinaYmdParts(now);
+  const dow = getChinaWeekdayIndex(now);
   const offsetMonday = dow === 0 ? -6 : 1 - dow;
-  return new Date(now.getFullYear(), now.getMonth(), now.getDate() + offsetMonday, 0, 0, 0, 0);
+  const todayChinaMidnightUtc = chinaMidnightToUtcDate(y, m, d);
+  return addDays(todayChinaMidnightUtc, offsetMonday);
 }
 
 function getIsoWeekValue(date: Date): string {
@@ -76,8 +104,11 @@ function parseWeekValue(weekValue: string): WeeklyProgressTimeWindow | null {
 function parseDateInput(value: string): Date | null {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
   const [y, m, d] = value.split("-").map(Number);
-  const date = new Date(y, m - 1, d, 0, 0, 0, 0);
-  if (date.getFullYear() !== y || date.getMonth() !== m - 1 || date.getDate() !== d) return null;
+  // 统一以中国时区当天 00:00（转成 UTC 时间点）作为边界，避免服务器时区影响
+  const date = chinaMidnightToUtcDate(y, m, d);
+  // 校验输入日期本身有效性
+  const check = new Date(Date.UTC(y, m - 1, d, 0, 0, 0, 0));
+  if (check.getUTCFullYear() !== y || check.getUTCMonth() !== m - 1 || check.getUTCDate() !== d) return null;
   return date;
 }
 
@@ -124,7 +155,7 @@ function resolveTimeFilter(params: SearchParams): {
     startValue: startRaw,
     endValue: endRaw,
     window: parsedWeek,
-    summaryLabel: `${formatDate(parsedWeek.start)} 至 ${formatDate(addDays(parsedWeek.endExclusive, -1))}`,
+    summaryLabel: `${formatChinaDate(parsedWeek.start)} 至 ${formatChinaDate(addDays(parsedWeek.endExclusive, -1))}`,
   };
 }
 

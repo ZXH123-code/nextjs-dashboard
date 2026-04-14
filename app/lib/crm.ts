@@ -2684,14 +2684,43 @@ export async function globalSearchCrm(
 
 // ============ 跟进汇报（原「本周跟进」，仅部分部门使用）============
 
-/** 本地日历周：周一 00:00 至下周一 00:00（不含） */
+const CHINA_TZ = "Asia/Shanghai" as const;
+
+function getChinaYmdParts(date: Date): { y: number; m: number; d: number } {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: CHINA_TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const y = Number(parts.find((p) => p.type === "year")?.value);
+  const m = Number(parts.find((p) => p.type === "month")?.value);
+  const d = Number(parts.find((p) => p.type === "day")?.value);
+  return { y, m, d };
+}
+
+/** 中国时区的「当天 00:00」对应的 UTC 时间点 */
+function chinaMidnightToUtcDate(y: number, m: number, d: number): Date {
+  // Asia/Shanghai 固定 UTC+8，无夏令时：当天 00:00 CST = 前一日 16:00 UTC
+  return new Date(Date.UTC(y, m - 1, d, -8, 0, 0, 0));
+}
+
+function getChinaWeekdayIndex(date: Date): 0 | 1 | 2 | 3 | 4 | 5 | 6 {
+  const w = new Intl.DateTimeFormat("en-US", { timeZone: CHINA_TZ, weekday: "short" }).format(date);
+  const map: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  const idx = map[w];
+  return (idx ?? 0) as 0 | 1 | 2 | 3 | 4 | 5 | 6;
+}
+
+/** 中国时区日历周：周一 00:00 至下周一 00:00（不含）；不依赖服务器本地时区 */
 function getLocalCalendarWeekBounds(): { weekStart: Date; weekEndExclusive: Date } {
   const now = new Date();
-  const dow = now.getDay();
+  const { y, m, d } = getChinaYmdParts(now);
+  const dow = getChinaWeekdayIndex(now);
   const offsetMonday = dow === 0 ? -6 : 1 - dow;
-  const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() + offsetMonday, 0, 0, 0, 0);
-  const nextMonday = new Date(monday);
-  nextMonday.setDate(monday.getDate() + 7);
+  const todayChinaMidnightUtc = chinaMidnightToUtcDate(y, m, d);
+  const monday = new Date(todayChinaMidnightUtc.getTime() + offsetMonday * 24 * 60 * 60 * 1000);
+  const nextMonday = new Date(monday.getTime() + 7 * 24 * 60 * 60 * 1000);
   return { weekStart: monday, weekEndExclusive: nextMonday };
 }
 
