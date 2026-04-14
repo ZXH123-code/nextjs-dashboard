@@ -90,6 +90,7 @@ function getOpenAIForImport(): {
   };
 }
 
+// 从ai可能返回的markdown代码块中提取json
 function extractJson(text: string): string {
   const trimmed = text.trim();
   const codeBlock = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
@@ -178,6 +179,10 @@ async function suggestLeadImportMapping(
     return { columns: [] };
   }
 
+  // LeadTargetFieldId 是数据库真实列名的枚举，比如 customerName, nickname, contactPerson
+  // targetFields是装有数据库真实字段描述信息的对象数组
+  // targetFields.map((f) => f.id) 就是 [ "customerName", "nickname", "contactPerson", "contactEmail", "contactPhone", "city", "address", "industry", "leadSource", "customerTier", "remark" ]
+  // allowedIds 是 targetFields.map((f) => f.id) 的集合
   const allowedIds = new Set<LeadTargetFieldId>(targetFields.map((f) => f.id));
 
   const byHeader: Record<string, LeadImportColumnSuggestion> = {};
@@ -190,6 +195,17 @@ async function suggestLeadImportMapping(
     };
   }
 
+  // parsed的结构类似：
+  // {
+  //   "mappings": [
+  //     {
+  //       "excel_header": "客户名称",
+  //       "target_field": "customerName",
+  //       "confidence": 0.95,
+  //       "reason": "客户名称是客户的全称或主要名称"
+  //     }
+
+  // 把模型返回的每一条映射建议，合并进前面按 Excel 表头建好的 byHeader 里
   for (const m of parsed.mappings) {
     const header = m.excel_header;
     if (!header || !(header in byHeader)) continue;
@@ -232,20 +248,25 @@ async function suggestLeadImportMapping(
     byTargetClean[s.suggestedField].push(s);
   }
 
+  // 业务上标记为「必填」的标准字段 id 集合；仅对这些字段做多列争抢时的冲突检测（可选字段多列映射由用户自行调整即可）
   const requiredIds = new Set<LeadTargetFieldId>(
     targetFields.filter((f) => f.required).map((f) => f.id),
   );
+  // 若同一标准字段对应了多列 Excel，且该字段为必填：按置信度排序，看第一名与第二名是否拉不开差距
   for (const [target, list] of Object.entries(byTargetClean)) {
     if (!requiredIds.has(target as LeadTargetFieldId)) continue;
     if (list.length <= 1) continue;
     list.sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0));
     const top = list[0];
     const second = list[1];
+    // 差值 < 0.15 视为模型也不确定该选哪一列：给所有候选列打 conflict，前端可提示用户人工确认
     if ((top.confidence ?? 0) - (second.confidence ?? 0) < 0.15) {
       for (const s of list) s.conflict = true;
     }
   }
 
+  // 输入：byHeader（以 Excel 表头为键的对象，值已在上面流程中写好 suggestedField / confidence / reason / conflict 等）
+  // 输出：{ columns } — columns 为 LeadImportColumnSuggestion[]，即每一列一条建议，供接口 JSON 返回给前端表格渲染（顺序通常与 byHeader 写入顺序一致）
   return { columns: Object.values(byHeader) };
 }
 
@@ -272,18 +293,28 @@ export async function POST(req: Request) {
   }
 
   try {
+    // 输入：multipart 中的 File；输出：ArrayBuffer（原始字节），再转为 Node Buffer 供 XLSX 读取
     const arrayBuffer = await file.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
+    // 输入：buffer；输出：workbook 对象（含 SheetNames、Sheets 等），即内存中的整本工作簿
     const workbook = XLSX.read(buffer, { type: "buffer" });
 
+    // 与导入接口一致：只读第一个工作表。例：SheetNames[0] === "Sheet1"
     const sheetName = workbook.SheetNames[0];
     const sheet = workbook.Sheets[sheetName];
+    // 将表转成「对象数组」：默认第一行作为键名。defval: "" 表示空单元格读成 ""。
+    // 示例输出 rows：[
+    //   { "公司名": "阿里", "电话": "13800138000" },
+    //   { "公司名": "腾讯", "电话": "13900139000" },
+    // ]
     const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" });
 
     if (!rows.length) {
       return NextResponse.json({ error: "表格内容为空" }, { status: 400 });
     }
 
+    // 用首行对象的键作为 Excel 列头列表（要求用户第一行是表头）
+    // 示例：firstRow 同上第一行；headers === ["公司名", "电话"]
     const firstRow = rows[0] as Record<string, unknown>;
     const headers = Object.keys(firstRow);
 
@@ -293,14 +324,18 @@ export async function POST(req: Request) {
 
     const limitedRows = rows.slice(0, MAX_SAMPLE_ROWS);
 
+    // 为每个表头构造一列「给 AI 看的样本」：输入 headers + limitedRows；输出 LeadImportColumn[]
+    // 示例：表头 "城市" 下多行有 北京/上海/北京 → sampleValues 可能为 ["北京","上海"]（去重，顺序为首次出现顺序）
     const columns: LeadImportColumn[] = headers.map((header) => {
       const values = new Set<string>();
+      // 在该列名下扫描 limitedRows：空单元格跳过，非空去重后加入 Set
       for (const r of limitedRows) {
         const raw = (r as Record<string, unknown>)[header];
         const str = raw == null ? "" : String(raw).trim();
         if (str) {
           values.add(str);
         }
+        // 每列最多收集 10 个非空不重复样本，控制 prompt 长度
         if (values.size >= 10) break;
       }
       return {
@@ -379,11 +414,14 @@ export async function POST(req: Request) {
       },
     ];
 
+    // 调用大模型：输入 columns（表头+样本）、targetFields（标准字段说明）；输出每列的 suggestedField / confidence / reason / conflict 等
     const aiResult = await suggestLeadImportMapping(columns, targetFields);
 
+    // suggestLeadImportMapping 返回体里不保证带 sampleValues；用 Map 按表头快速找回「解析 Excel 时算好的样本」，供前端同一行展示
     const samplesByHeader = new Map<string, string[]>(
       columns.map((c) => [c.excelHeader, c.sampleValues]),
     );
+    // 合并：AI 建议字段 + 原始样本列，避免响应丢样本或顺序与前端表格不一致
     const mergedColumns = aiResult.columns.map((c) => ({
       ...c,
       sampleValues: samplesByHeader.get(c.excelHeader) ?? [],

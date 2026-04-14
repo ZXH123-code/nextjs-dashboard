@@ -51,7 +51,7 @@ function CatchUpLeadRow({
         return;
       }
       setText("");
-      showAlert("已写入，该线索会出现在下方「本周跟进」主列表中", {
+      showAlert("已写入，该线索在符合当前时间筛选时会出现在主列表中", {
         type: "success",
         title: "成功",
       });
@@ -148,16 +148,21 @@ export function CatchUpLeadsSheet() {
     <Sheet open={open} onOpenChange={handleOpenChange}>
       <AlertComponent />
       <SheetTrigger asChild>
-        <Button variant="outline" size="sm" className="gap-1.5">
+        <Button
+          variant="outline"
+          size="sm"
+          className="gap-1.5"
+          title="在可查线索中搜索，选中后快速写一条跟进"
+        >
           <ListPlus className="h-4 w-4" aria-hidden />
-          补本周跟进
+          搜索线索写跟进
         </Button>
       </SheetTrigger>
       <SheetContent side="right" className="flex h-full w-full max-w-full flex-col sm:max-w-lg">
         <SheetHeader className="space-y-1 pr-8 text-left">
-          <SheetTitle>从全部线索补跟进</SheetTitle>
+          <SheetTitle>搜索线索写跟进</SheetTitle>
           <SheetDescription>
-            搜索任一线索，写一条最简跟进后即计入本周；保存后该线索会出现在本页主列表中。
+            在可查线索中搜索目标，写一条最简跟进即可；保存后若跟进落在页面上方所选时段内，会出现在下方主列表。
           </SheetDescription>
         </SheetHeader>
 

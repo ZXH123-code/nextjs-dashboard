@@ -100,7 +100,7 @@ export default function SideNav({
           >
             <div className="bg-[var(--sidebar-footer-bg)] rounded-lg p-4 text-center text-xs">
               <div className="text-[var(--sidebar-text-hover)] mb-2">
-                CRM 简易系统
+                CRM 工作台
               </div>
               <div className="text-[var(--sidebar-text)]">Built with Next.js</div>
             </div>

@@ -181,15 +181,16 @@ function LatestFollowUpBlock({ fu }: { fu: LatestFollowUp }) {
 type Props = {
   items: WeeklyProgressLeadItem[];
   followUpsThisWeekByLeadId: Record<string, WeeklyProgressFollowUpRow[]>;
+  periodLabel: string;
 };
 
-export function WeeklyProgressTable({ items, followUpsThisWeekByLeadId }: Props) {
+export function WeeklyProgressTable({ items, followUpsThisWeekByLeadId, periodLabel }: Props) {
   if (items.length === 0) {
     return (
       <div className="rounded-2xl border border-dashed border-border bg-muted/20 px-6 py-16 text-center">
         <p className="text-sm font-medium text-foreground">当前筛选下暂无线索</p>
         <p className="mt-2 text-sm text-muted-foreground">
-          可点击页面上方「补本周跟进」，搜索线索并写一条最简跟进，保存后即会出现在此列表。
+          可点击页面上方「搜索线索写跟进」，在可查线索中搜索并写一条最简跟进；保存后若落在当前时段内，会出现在此列表。
         </p>
       </div>
     );
@@ -310,7 +311,7 @@ export function WeeklyProgressTable({ items, followUpsThisWeekByLeadId }: Props)
                 <section className="rounded-xl border border-border/90 bg-muted/25 p-4 sm:p-5">
                   <div className="mb-3 flex items-center justify-between gap-2">
                     <h3 className="text-xs font-bold uppercase tracking-[0.12em] text-foreground/70">
-                      本周全部跟进
+                      {periodLabel}全部跟进
                     </h3>
                     <span className="rounded-full bg-background px-2 py-0.5 text-[11px] font-semibold tabular-nums text-muted-foreground ring-1 ring-border">
                       {weekList.length} 条
@@ -318,11 +319,11 @@ export function WeeklyProgressTable({ items, followUpsThisWeekByLeadId }: Props)
                   </div>
 
                   {weekList.length === 0 ? (
-                    <p className="text-sm text-muted-foreground">本周暂无跟进记录。</p>
+                    <p className="text-sm text-muted-foreground">{periodLabel}暂无跟进记录。</p>
                   ) : (
                     <ul
                       className="relative max-h-[min(320px,50vh)] space-y-0 overflow-y-auto pr-1"
-                      aria-label="本周跟进时间线"
+                      aria-label={`${periodLabel}跟进时间线`}
                     >
                       <li
                         className="absolute bottom-1 left-[7px] top-2 w-px bg-border"

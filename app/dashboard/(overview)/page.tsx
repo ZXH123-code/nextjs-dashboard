@@ -97,17 +97,17 @@ export default async function Page() {
             href="/dashboard/crm/weekly-progress"
             className="font-medium text-primary underline-offset-4 hover:underline"
           >
-            本周跟进（汇报视图）
+            跟进汇报
           </Link>
           <p className="mt-1 text-sm text-muted-foreground">
-            按周查看线索评级与最新跟进摘要，便于周会汇报。
+            默认按本周汇总，也可自选周或时段；查看线索评级与跟进摘要，便于例会汇报。
           </p>
         </div>
       )}
 
       <div className="mt-6 rounded-xl bg-gray-50 p-6">
         <p className="text-muted-foreground">
-          欢迎使用 CRM 简易系统，请从左侧菜单进入线索管理、商机管理或客户管理。
+          欢迎使用 CRM 工作台，请从左侧菜单进入线索管理、商机管理或客户管理。
         </p>
       </div>
     </main>

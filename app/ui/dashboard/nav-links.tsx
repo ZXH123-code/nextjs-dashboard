@@ -31,7 +31,7 @@ interface NavLinkGroup {
   links: NavLink[];
 }
 
-// 导航链接分组 - CRM 简易系统（权限管理仅 admin 可见，由 NavLinks 动态注入）
+// 导航链接分组 - CRM 工作台（权限管理仅 admin 可见，由 NavLinks 动态注入）
 function getNavGroups(role: string, showWeeklyProgress: boolean): NavLinkGroup[] {
   const crmSubLinks: SubLink[] = [
     { name: "客户管理表", href: "/dashboard/crm/customers" },
@@ -40,7 +40,7 @@ function getNavGroups(role: string, showWeeklyProgress: boolean): NavLinkGroup[]
     { name: "本月计划", href: "/dashboard/crm/monthly-plan" },
   ];
   if (showWeeklyProgress) {
-    crmSubLinks.push({ name: "本周跟进", href: "/dashboard/crm/weekly-progress" });
+    crmSubLinks.push({ name: "跟进汇报", href: "/dashboard/crm/weekly-progress" });
   }
   crmSubLinks.push(
     { name: "线索管理表", href: "/dashboard/crm/leads" },

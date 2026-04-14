@@ -2682,7 +2682,7 @@ export async function globalSearchCrm(
   };
 }
 
-// ============ 本周跟进（汇报视图，仅部分部门使用）============
+// ============ 跟进汇报（原「本周跟进」，仅部分部门使用）============
 
 /** 本地日历周：周一 00:00 至下周一 00:00（不含） */
 function getLocalCalendarWeekBounds(): { weekStart: Date; weekEndExclusive: Date } {
@@ -2727,17 +2727,30 @@ export type WeeklyProgressLeadItem = Prisma.crm_leadGetPayload<{
   include: typeof weeklyProgressLeadInclude;
 }>;
 
-function buildWeeklyFollowUpThisWeekWhere(): Prisma.crm_follow_upWhereInput {
+export type WeeklyProgressTimeWindow = {
+  start: Date;
+  endExclusive: Date;
+};
+
+function resolveWeeklyProgressTimeWindow(window?: WeeklyProgressTimeWindow): WeeklyProgressTimeWindow {
+  if (window?.start && window?.endExclusive && window.start < window.endExclusive) {
+    return window;
+  }
   const { weekStart, weekEndExclusive } = getLocalCalendarWeekBounds();
+  return { start: weekStart, endExclusive: weekEndExclusive };
+}
+
+function buildWeeklyProgressFollowUpWhere(window?: WeeklyProgressTimeWindow): Prisma.crm_follow_upWhereInput {
+  const resolved = resolveWeeklyProgressTimeWindow(window);
   return {
     OR: [
-      { followDate: { gte: weekStart, lt: weekEndExclusive } },
-      { createdAt: { gte: weekStart, lt: weekEndExclusive } },
+      { followDate: { gte: resolved.start, lt: resolved.endExclusive } },
+      { createdAt: { gte: resolved.start, lt: resolved.endExclusive } },
     ],
   };
 }
 
-/** 本周跟进页：单条跟进展示（含录入人） */
+/** 跟进汇报页：单条跟进展示（含录入人） */
 export type WeeklyProgressFollowUpRow = {
   id: string;
   leadId: string;
@@ -2748,19 +2761,20 @@ export type WeeklyProgressFollowUpRow = {
   authorName: string;
 };
 
-async function fetchFollowUpsThisWeekByLeadId(
+async function fetchFollowUpsByLeadIdInWindow(
   auth: CrmAuth,
-  leadIds: string[]
+  leadIds: string[],
+  window?: WeeklyProgressTimeWindow
 ): Promise<Record<string, WeeklyProgressFollowUpRow[]>> {
   const empty: Record<string, WeeklyProgressFollowUpRow[]> = {};
   if (!auth || leadIds.length === 0) return empty;
-  const { weekStart, weekEndExclusive } = getLocalCalendarWeekBounds();
+  const resolved = resolveWeeklyProgressTimeWindow(window);
   const rows = await prisma.crm_follow_up.findMany({
     where: {
       leadId: { in: leadIds },
       OR: [
-        { followDate: { gte: weekStart, lt: weekEndExclusive } },
-        { createdAt: { gte: weekStart, lt: weekEndExclusive } },
+        { followDate: { gte: resolved.start, lt: resolved.endExclusive } },
+        { createdAt: { gte: resolved.start, lt: resolved.endExclusive } },
       ],
       lead: { is: buildLeadWhere(auth, false) },
     },
@@ -2796,17 +2810,17 @@ async function fetchFollowUpsThisWeekByLeadId(
   return map;
 }
 
-/** 列表：与线索管理相同权限范围，附带最新一条跟进；可选仅本周有跟进的线索；并返回各线索本周全部跟进 */
+/** 列表：与线索管理相同权限范围，附带最新一条跟进；并返回各线索在指定时间范围内的全部跟进 */
 export async function getLeadsForWeeklyProgress(
   auth: CrmAuth,
-  options: { weekOnly: boolean }
+  options: { weekOnly: boolean; window?: WeeklyProgressTimeWindow }
 ): Promise<{
   items: WeeklyProgressLeadItem[];
   total: number;
   followUpsThisWeekByLeadId: Record<string, WeeklyProgressFollowUpRow[]>;
 }> {
   const baseWhere = buildLeadWhere(auth, false);
-  const weekFollowWhere = buildWeeklyFollowUpThisWeekWhere();
+  const weekFollowWhere = buildWeeklyProgressFollowUpWhere(options.window);
   const where: Prisma.crm_leadWhereInput = options.weekOnly
     ? {
         ...baseWhere,
@@ -2830,20 +2844,23 @@ export async function getLeadsForWeeklyProgress(
 
   const typed = items as WeeklyProgressLeadItem[];
   const leadIds = typed.map((l) => l.id);
-  const followUpsThisWeekByLeadId = await fetchFollowUpsThisWeekByLeadId(auth, leadIds);
+  const followUpsThisWeekByLeadId = await fetchFollowUpsByLeadIdInWindow(auth, leadIds, options.window);
 
   return { items: typed, total, followUpsThisWeekByLeadId };
 }
 
-/** 顶部统计：线索总数、本周有跟进的线索数、本周跟进记录条数（部门范围内） */
-export async function getWeeklyProgressStats(auth: CrmAuth): Promise<{
+/** 顶部统计：线索合计、有跟进线索数、跟进条数（权限范围内，随所选时间窗口变化） */
+export async function getWeeklyProgressStats(
+  auth: CrmAuth,
+  window?: WeeklyProgressTimeWindow
+): Promise<{
   leadTotal: number;
   leadsWithFollowUpThisWeek: number;
   followUpsThisWeekCount: number;
 }> {
   const baseWhere = buildLeadWhere(auth, false);
-  const weekFollowWhere = buildWeeklyFollowUpThisWeekWhere();
-  const { weekStart, weekEndExclusive } = getLocalCalendarWeekBounds();
+  const weekFollowWhere = buildWeeklyProgressFollowUpWhere(window);
+  const resolved = resolveWeeklyProgressTimeWindow(window);
   const [leadTotal, leadsWithFollowUpThisWeek, followUpsThisWeekCount] = await Promise.all([
     prisma.crm_lead.count({ where: baseWhere }),
     prisma.crm_lead.count({
@@ -2856,8 +2873,8 @@ export async function getWeeklyProgressStats(auth: CrmAuth): Promise<{
       where: {
         leadId: { not: null },
         OR: [
-          { followDate: { gte: weekStart, lt: weekEndExclusive } },
-          { createdAt: { gte: weekStart, lt: weekEndExclusive } },
+          { followDate: { gte: resolved.start, lt: resolved.endExclusive } },
+          { createdAt: { gte: resolved.start, lt: resolved.endExclusive } },
         ],
         lead: { is: baseWhere },
       },
@@ -2866,7 +2883,7 @@ export async function getWeeklyProgressStats(auth: CrmAuth): Promise<{
   return { leadTotal, leadsWithFollowUpThisWeek, followUpsThisWeekCount };
 }
 
-/** 侧栏「补本周跟进」：轻量线索列表（搜索客户名/简称/商机名） */
+/** 侧栏「搜索线索写跟进」：轻量线索列表（搜索客户名/简称/商机名） */
 export type CatchUpLeadRow = {
   id: string;
   customerName: string;

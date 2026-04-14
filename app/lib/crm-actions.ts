@@ -1041,7 +1041,7 @@ export async function createQuickLeadFollowUpAction(
   return { success: true };
 }
 
-/** 本周跟进侧栏：可搜索的线索列表，用于补写跟进 */
+/** 跟进汇报侧栏：可搜索的线索列表，用于快速补写跟进 */
 export async function getLeadsForCatchUpListAction(search: string) {
   const auth = await getCrmAuth();
   if (!auth) return [];
