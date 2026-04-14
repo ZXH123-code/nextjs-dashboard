@@ -341,6 +341,68 @@ export async function addLeadsToMonthlyPlanAction(
   return { success: true, count: leadIds.length };
 }
 
+/** 销售自助纳入本月计划：仅可将自己可见（自己负责）的线索加入「我的本月计划」 */
+export async function addMyLeadsToMonthlyPlanAction(
+  leadIds: string[]
+): Promise<
+  | { error: string }
+  | { success: true; addedCount: number; alreadyCount: number; forbiddenCount: number }
+> {
+  const crmAuth = await getCrmAuth();
+  if (!crmAuth?.userId) return { error: "请先登录" };
+  if (!crmAuth.departmentId) return { error: "当前账号未绑定部门" };
+  if (crmAuth.role !== "sales") return { error: "仅普通销售可使用自助纳入" };
+
+  const uniqueLeadIds = Array.from(new Set((leadIds ?? []).filter(Boolean)));
+  if (uniqueLeadIds.length === 0) return { error: "请选择至少一条线索" };
+
+  const planMonth = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}`;
+  const visibleLeads = await prisma.crm_lead.findMany({
+    where: {
+      id: { in: uniqueLeadIds },
+      deletedAt: null,
+      departmentId: crmAuth.departmentId,
+      assignees: { some: { userId: crmAuth.userId } },
+    },
+    select: { id: true },
+  });
+  const visibleLeadIds = visibleLeads.map((l) => l.id);
+  const forbiddenCount = uniqueLeadIds.length - visibleLeadIds.length;
+  if (visibleLeadIds.length === 0) {
+    return { success: true, addedCount: 0, alreadyCount: 0, forbiddenCount };
+  }
+
+  const existing = await prisma.crm_monthly_plan_lead.findMany({
+    where: {
+      leadId: { in: visibleLeadIds },
+      userId: crmAuth.userId,
+      planMonth,
+    },
+    select: { leadId: true },
+  });
+  const existingSet = new Set(existing.map((r) => r.leadId));
+  const toCreateLeadIds = visibleLeadIds.filter((id) => !existingSet.has(id));
+  const alreadyCount = visibleLeadIds.length - toCreateLeadIds.length;
+
+  let addedCount = 0;
+  if (toCreateLeadIds.length > 0) {
+    const created = await prisma.crm_monthly_plan_lead.createMany({
+      data: toCreateLeadIds.map((leadId) => ({
+        leadId,
+        userId: crmAuth.userId,
+        planMonth,
+      })),
+      skipDuplicates: true,
+    });
+    addedCount = created.count;
+  }
+
+  revalidatePath("/dashboard/crm/leads");
+  revalidatePath("/dashboard/crm/monthly-plan");
+  revalidatePath("/dashboard");
+  return { success: true, addedCount, alreadyCount, forbiddenCount };
+}
+
 // 物理删除线索（仅 admin）：强制删除线索，并级联删除关联的商机与客户（谨慎使用）
 export async function deleteLeadAction(formData: FormData) {
   const session = await auth();

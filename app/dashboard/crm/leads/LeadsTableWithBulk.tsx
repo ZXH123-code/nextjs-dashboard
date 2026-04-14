@@ -66,7 +66,7 @@ import {
 import { SheetScrollArea } from "@/components/ui/sheet-scroll-area";
 import { FollowUpTimeline } from "../components/FollowUpTimeline";
 import { WriteFollowUpDialog } from "../components/WriteFollowUpDialog";
-import { createManualFollowUpAction, updateLeadAction, softDeleteLeadAction, syncLeadNameToCustomerAction, syncLeadContactPhoneToCustomerAction, syncLeadContactPhoneToOpportunityAction, batchUpdateLeadSalesPersonWithFollowUpAction, toggleLeadKeyFocusAction, batchSetLeadKeyFocusAction, batchSoftDeleteLeadsAction, getLeadIdsAction, addLeadsToMonthlyPlanAction } from "@/app/lib/crm-actions";
+import { createManualFollowUpAction, updateLeadAction, softDeleteLeadAction, syncLeadNameToCustomerAction, syncLeadContactPhoneToCustomerAction, syncLeadContactPhoneToOpportunityAction, batchUpdateLeadSalesPersonWithFollowUpAction, toggleLeadKeyFocusAction, batchSetLeadKeyFocusAction, batchSoftDeleteLeadsAction, getLeadIdsAction, addLeadsToMonthlyPlanAction, addMyLeadsToMonthlyPlanAction } from "@/app/lib/crm-actions";
 import { LEAD_STATUS } from "@/app/lib/crm-constants";
 
 type Lead = {
@@ -386,12 +386,46 @@ export function LeadsTableWithBulk({
   const openMonthlyPlanDialog = () => {
     setContextMenuAt(null);
     if (!isAdmin) {
-      showAlert("仅管理员可分配至本月计划。", { type: "error", title: "无权限" });
+      void handleAddToMyMonthlyPlan(Array.from(selectedIds), { clearAfter: true });
       return;
     }
     setMonthlyPlanError("");
     setMonthlyPlanUserIds(new Set());
     setMonthlyPlanOpen(true);
+  };
+
+  const handleAddToMyMonthlyPlan = async (
+    leadIds: string[],
+    options: { clearAfter?: boolean } = {}
+  ) => {
+    const targetIds = Array.from(new Set((leadIds ?? []).filter(Boolean)));
+    if (targetIds.length === 0) {
+      showAlert("请先选择至少一条线索", { type: "info", title: "未选择线索" });
+      return;
+    }
+
+    setMonthlyPlanLoading(true);
+    try {
+      const result = await addMyLeadsToMonthlyPlanAction(targetIds);
+      if ("error" in result) {
+        showAlert(result.error, { type: "error", title: "操作失败" });
+        return;
+      }
+
+      const parts: string[] = [];
+      if (result.addedCount > 0) parts.push(`新增 ${result.addedCount} 条`);
+      if (result.alreadyCount > 0) parts.push(`已在计划 ${result.alreadyCount} 条`);
+      if (result.forbiddenCount > 0) parts.push(`无权限跳过 ${result.forbiddenCount} 条`);
+
+      showAlert(parts.join("，"), {
+        type: result.addedCount > 0 ? "success" : "info",
+        title: result.addedCount > 0 ? "已纳入本月计划" : "未新增",
+      });
+      if (options.clearAfter) clearSelection();
+      doRefresh();
+    } finally {
+      setMonthlyPlanLoading(false);
+    }
   };
 
   const handleMonthlyPlanSubmit = async () => {
@@ -1036,7 +1070,7 @@ export function LeadsTableWithBulk({
               onClick={openMonthlyPlanDialog}
             >
               <CalendarDays className="h-4 w-4" />
-              分配至本月计划
+              {isAdmin ? "分配至本月计划" : "纳入我的本月计划"}
             </button>
             <>
               <div className="my-1 border-t border-border" />
@@ -1353,6 +1387,16 @@ export function LeadsTableWithBulk({
                                 <FileText className="mr-2 h-4 w-4" />
                                 查看记录
                               </DropdownMenuItem>
+                              {!isAdmin && (
+                                <DropdownMenuItem
+                                  onClick={() => {
+                                    void handleAddToMyMonthlyPlan([lead.id]);
+                                  }}
+                                >
+                                  <CalendarDays className="mr-2 h-4 w-4" />
+                                  纳入我的本月计划
+                                </DropdownMenuItem>
+                              )}
                               <DropdownMenuItem onClick={() => toggleExpandedLead(lead.id)}>
                                 {expandedLeadIds.has(lead.id) ? (
                                   <ChevronUp className="mr-2 h-4 w-4" />

@@ -116,7 +116,7 @@ export default async function MonthlyPlanPage({
       )}
 
       <p className="mt-4 text-sm text-muted-foreground">
-        本月计划中的线索来自线索管理表，勾选后通过右键「分配至本月计划」指定跟进人。销售仅能看到分配给自己的本月计划。
+        本月计划中的线索来自线索管理表：管理员可通过右键「分配至本月计划」指定跟进人；普通销售也可将自己负责的线索纳入「我的本月计划」。销售仅能看到自己的本月计划。
       </p>
     </main>
   );
